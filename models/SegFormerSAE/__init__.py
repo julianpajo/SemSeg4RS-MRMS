@@ -1,16 +1,16 @@
 """
 models/SegFormerSAE
 -------------------
-SegFormer + SAE + BRD per segmentazione semantica RS multispettrale.
+SegFormer + SAE + BRD for multispectral remote sensing semantic segmentation.
 
 Public API
 ----------
-    SegFormerSAE    – modello completo
-    SAEModule       – embedding spettrale standalone
-    BRDDecoder      – Boundary-Refined Decoder standalone
-    SegFormerHead   – All-MLP decoder head (modalità senza BRD)
-    ClassifierHead  – classifier head leggero (modalità con BRD)
-    MiT_CONFIGS     – configurazioni b0–b5
+    SegFormerSAE    – full model
+    SAEModule       – standalone spectral embedding
+    BRDDecoder      – standalone Boundary-Refined Decoder
+    SegFormerHead   – All-MLP decoder head (mode without BRD)
+    ClassifierHead  – lightweight classifier head (mode with BRD)
+    MiT_CONFIGS     – b0–b5 configurations
 """
 
 from .segformer_sae     import SegFormerSAE, MiT_CONFIGS

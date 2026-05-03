@@ -1,10 +1,10 @@
 """
 Boundary-Refined Decoder (BRD)
 -------------------------------
-Versione generalizzata del WBRD (Wetland Boundary-Refined Decoder) del paper,
-rinominata per uso su dataset generici di segmentazione semantica RS.
+Generalized version of the WBRD (Wetland Boundary-Refined Decoder) from the paper,
+renamed for use on generic remote sensing semantic segmentation datasets.
 
-Architettura (Figure 5, 6, 7 del paper):
+Architecture (Figures 5, 6, 7 of the paper):
 
   Encoder features: [F1, F2, F3, F4]
     F4 (512, H/32) → A → ┐
@@ -22,11 +22,11 @@ Architettura (Figure 5, 6, 7 del paper):
 
   Output F5: (B, 64, H/4, W/4)
 
-Sub-moduli:
-  SobelFilter       – gradiente non trainabile (∇F)
+Submodules:
+  SobelFilter       – non-trainable gradient prior (∇F)
   DPRModule         – Dual-Path Refine  [Eq. 7]
   MBAModule         – Multi-scale Boundary Attention [Eq. 8-9]
-  BRDDecoder        – decoder progressivo [Eq. 10]
+  BRDDecoder        – progressive decoder [Eq. 10]
 """
 
 import torch
@@ -40,27 +40,27 @@ import torch.nn.functional as F
 
 class SobelFilter(nn.Module):
     """
-    Applica il filtro di Sobel su ogni canale indipendentemente (depthwise).
-    Non ha parametri trainabili — agisce come prior geometrico stabile.
-    Output: magnitudine del gradiente, stessa shape dell'input.
+    Applies the Sobel filter independently to each channel (depthwise).
+    It has no trainable parameters — it acts as a stable geometric prior.
+    Output: gradient magnitude, same shape as the input.
     """
 
     def __init__(self):
         super().__init__()
-        # Kernel Sobel Gx e Gy
+        # Sobel Gx and Gy kernels
         kx = torch.tensor([[-1, 0, 1],
                             [-2, 0, 2],
                             [-1, 0, 1]], dtype=torch.float32)
         ky = torch.tensor([[-1,-2,-1],
                             [ 0, 0, 0],
                             [ 1, 2, 1]], dtype=torch.float32)
-        # shape: (1, 1, 3, 3) — verrà espanso a (C, 1, 3, 3) in forward
+        # shape: (1, 1, 3, 3) — expanded to (C, 1, 3, 3) in forward
         self.register_buffer("kx", kx.view(1, 1, 3, 3))
         self.register_buffer("ky", ky.view(1, 1, 3, 3))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, C, H, W = x.shape
-        # Espandi kernel per ogni canale (depthwise)
+        # Expand kernels for each channel (depthwise)
         kx = self.kx.expand(C, 1, 3, 3)
         ky = self.ky.expand(C, 1, 3, 3)
         gx = F.conv2d(x, kx, padding=1, groups=C)
@@ -76,7 +76,7 @@ class DPRModule(nn.Module):
     """
     Path 1: DWConv3×3 → PWConv1×1 → BN+GeLU
     Path 2: Sobel(∇F) → Conv3×3   → BN+GeLU
-    Concat → Conv1×1 → BN+GeLU → Output (stessa C dell'input)
+    Concat → Conv1×1 → BN+GeLU → Output (same C as the input)
     """
 
     def __init__(self, channels: int):
@@ -105,7 +105,7 @@ class DPRModule(nn.Module):
         # Path 1
         p1 = self.gelu(self.bn1(self.pw_conv(self.dw_conv(x))))
 
-        # Path 2  (Sobel non trainabile)
+        # Path 2  (non-trainable Sobel)
         with torch.no_grad():
             grad = self.sobel(x)
         p2 = self.gelu(self.bn2(self.edge_conv(grad)))
@@ -120,7 +120,7 @@ class DPRModule(nn.Module):
 
 class MBAModule(nn.Module):
     """
-    4 branch parallele: Conv3×3, Conv5×5, Conv7×7 + Sobel
+    4 parallel branches: Conv3×3, Conv5×5, Conv7×7 + Sobel
     Concat → Conv1×1 → BN → Sigmoid → attention map A
     Output: F ⊙ A  (boundary-amplified features)
     """
@@ -140,14 +140,14 @@ class MBAModule(nn.Module):
         self.b5 = branch(5)
         self.b7 = branch(7)
 
-        # Branch Sobel
+        # Sobel branch
         self.b_edge = nn.Sequential(
             nn.Conv2d(channels, channels, 3, padding=1, bias=False),
             nn.BatchNorm2d(channels),
             nn.GELU(),
         )
 
-        # Genera mappa di attenzione  [Eq. 8]
+        # Generates the attention map  [Eq. 8]
         self.attn = nn.Sequential(
             nn.Conv2d(channels * 4, channels, 1, bias=False),
             nn.BatchNorm2d(channels),
@@ -188,7 +188,7 @@ class BlockA(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# Block B  =  Conv3×3 → BN → GeLU   (dopo Concat skip)
+# Block B  =  Conv3×3 → BN → GeLU   (after skip concat)
 # ---------------------------------------------------------------------------
 
 class BlockB(nn.Module):
@@ -210,8 +210,8 @@ class BlockB(nn.Module):
 
 class BRDDecoder(nn.Module):
     """
-    Progressive upsampling decoder con skip connections e refinement
-    boundary-aware.
+    Progressive upsampling decoder with skip connections and boundary-aware
+    refinement.
 
     Pipeline [Eq. 10]:
       F4 → A4 → Concat(A4_up, F3) → B3 → x3
@@ -221,9 +221,9 @@ class BRDDecoder(nn.Module):
     Parameters
     ----------
     encoder_channels : list[int]
-        Canali per [F1, F2, F3, F4], default [64, 128, 320, 512].
+        Channels for [F1, F2, F3, F4], default [64, 128, 320, 512].
     out_channels : int
-        Canali output F5 (default 64, allineato con F1).
+        F5 output channels (default 64, aligned with F1).
     """
 
     def __init__(
@@ -237,14 +237,14 @@ class BRDDecoder(nn.Module):
 
         C1, C2, C3, C4 = encoder_channels
 
-        # Proiezione iniziale F4 → C3 (per allineare i canali prima del Concat)
+        # Initial projection F4 → C3 (to align channels before Concat)
         self.proj4 = nn.Conv2d(C4, C3, 1, bias=False)
 
         # Step 1: F4 → A → 2×UP → Concat F3 → B  (output: C2)
         self.a4 = BlockA(C3)
         self.b3 = BlockB(C3 + C3, C2)   # Concat: A4_up(C3) + F3(C3)
 
-        # Proiezione F2 → C2 se necessario (F2 già C2=128, ma per uniformità)
+        # F2 → C2 projection if needed (F2 is already C2=128, but kept for uniformity)
         # Step 2: x3 → A → 2×UP → Concat F2 → B  (output: C1)
         self.a3 = BlockA(C2)
         self.b2 = BlockB(C2 + C2, C1)   # Concat: A3_up(C2) + F2(C2)

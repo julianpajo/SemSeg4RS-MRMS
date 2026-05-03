@@ -1,25 +1,25 @@
 """
 SegFormer + SAE + BRD  –  Full Segmentation Model
 --------------------------------------------------
-Assembla:
-  SAEModule      (sae_module.py)        ← embedding spettrale
+Assembles:
+  SAEModule      (sae_module.py)        ← spectral embedding
       ↓
-  SegformerModel (HuggingFace)          ← backbone MiT pretrained
+  SegformerModel (HuggingFace)          ← pretrained MiT backbone
       ↓  [F1, F2, F3, F4]
-  BRDDecoder     (brd_decoder.py)       ← boundary-refined decoder [opzionale]
+  BRDDecoder     (brd_decoder.py)       ← boundary-refined decoder [optional]
       ↓  F5 (B, 64, H/4, W/4)
-  ClassifierHead (segformer_decoder.py) ← logits full-resolution
+  ClassifierHead (segformer_decoder.py) ← full-resolution logits
 
-  Se use_brd=False: [F1..F4] → SegFormerHead (All-MLP decoder originale)
+  If use_brd=False: [F1..F4] → SegFormerHead (original All-MLP decoder)
 
 Usage
 -----
     from models.SegFormerSAE import SegFormerSAE
 
-    # Con BRD (default)
+    # With BRD (default)
     model = SegFormerSAE.from_pretrained("nvidia/mit-b2", in_channels=12, num_classes=14)
 
-    # Senza BRD (decoder originale SegFormer)
+    # Without BRD (original SegFormer decoder)
     model = SegFormerSAE(variant="mit-b2", in_channels=12, num_classes=14, use_brd=False)
 """
 
@@ -59,14 +59,14 @@ class SegFormerSAE(nn.Module):
     """
     Parameters
     ----------
-    variant       : str    chiave MiT, es. 'mit-b2'
-    in_channels   : int    bande spettrali in input (default 12)
-    num_classes   : int    classi di segmentazione (default 14)
-    use_brd       : bool   usa BRDDecoder (True) o SegFormerHead originale (False)
-    decoder_dim   : int    dim fusione per SegFormerHead (None = auto, ignorato con BRD)
-    sae_reduction : int    reduction ratio SAE channel attention (default 8)
-    dropout       : float  dropout classifier head (default 0.1)
-    drop_path     : float  stochastic depth encoder (default 0.1)
+    variant       : str    MiT key, e.g. 'mit-b2'
+    in_channels   : int    input spectral bands (default 12)
+    num_classes   : int    segmentation classes (default 14)
+    use_brd       : bool   use BRDDecoder (True) or original SegFormerHead (False)
+    decoder_dim   : int    fusion dimension for SegFormerHead (None = auto, ignored with BRD)
+    sae_reduction : int    SAE channel-attention reduction ratio (default 8)
+    dropout       : float  classifier head dropout (default 0.1)
+    drop_path     : float  encoder stochastic depth (default 0.1)
     """
 
     def __init__(
@@ -152,10 +152,10 @@ class SegFormerSAE(nn.Module):
         **kwargs,
     ) -> "SegFormerSAE":
         """
-        Crea il modello e carica i pesi pretrained dell'encoder da HuggingFace.
-        strict=False perché num_channels cambia da 3 → C1 (output SAE).
+        Creates the model and loads pretrained encoder weights from HuggingFace.
+        strict=False because num_channels changes from 3 → C1 (SAE output).
 
-        Esempio
+        Example
         -------
             model = SegFormerSAE.from_pretrained(
                 "nvidia/mit-b2", in_channels=12, num_classes=14
@@ -170,8 +170,8 @@ class SegFormerSAE(nn.Module):
             pretrained.state_dict(), strict=False
         )
         if missing:
-            print(f"[SegFormerSAE] Pesi mancanti ({len(missing)}): {missing[:3]} ...")
-        print(f"[SegFormerSAE] Encoder caricato da '{hf_model_name}'")
+            print(f"[SegFormerSAE] Missing weights ({len(missing)}): {missing[:3]} ...")
+        print(f"[SegFormerSAE] Encoder loaded from '{hf_model_name}'")
         return model
 
     # ------------------------------------------------------------------

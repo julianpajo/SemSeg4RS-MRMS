@@ -3,12 +3,12 @@ SegFormer Decoder Heads
 -----------------------
 
 SegFormerHead
-    Decoder originale SegFormer: fonde [F1, F2, F3, F4] con proiezioni MLP.
-    Usato quando BRD è disabilitato.
+    Original SegFormer decoder: fuses [F1, F2, F3, F4] with MLP projections.
+    Used when BRD is disabled.
 
 ClassifierHead
-    Classifier head leggero che riceve F5 (output di BRDDecoder, già a H/4)
-    e produce logits full-resolution.
+    Lightweight classifier head that receives F5 (BRDDecoder output, already at H/4)
+    and produces full-resolution logits.
     Pipeline: Conv3×3 → BN → GeLU → Dropout → Conv1×1 → 4× UP
 """
 
@@ -97,20 +97,20 @@ class SegFormerHead(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# ClassifierHead  –  riceve F5 da BRDDecoder  (B, C, H/4, W/4)
+# ClassifierHead  –  receives F5 from BRDDecoder  (B, C, H/4, W/4)
 # ---------------------------------------------------------------------------
 
 class ClassifierHead(nn.Module):
     """
-    Classifier head leggero che opera su F5 (output di BRDDecoder).
+    Lightweight classifier head that operates on F5 (BRDDecoder output).
 
     Pipeline: Conv3×3 → BN → GeLU → Dropout → Conv1×1 → 4× UP
 
     Parameters
     ----------
-    in_channels : int   canali di F5 (default 64)
-    num_classes : int   classi di segmentazione
-    dropout     : float dropout prima del Conv1×1
+    in_channels : int   F5 channels (default 64)
+    num_classes : int   segmentation classes
+    dropout     : float dropout before Conv1×1
     """
 
     def __init__(
