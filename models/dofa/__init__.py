@@ -1,13 +1,13 @@
 """
-models/DOFA
+models/dofa
 -----------
-DOFA per segmentazione semantica RS multispettrale.
+dofa per segmentazione semantica RS multispettrale.
 
 Paper:  "Neural Plasticity-Inspired Foundation Model for Observing
          the Earth Crossing Modalities"  — https://arxiv.org/abs/2403.15356
 
 Architettura:
-  DOFA backbone (torchgeo, opzionalmente frozen)
+  dofa backbone (torchgeo, opzionalmente frozen)
       ↓  4 feature maps  (B, embed_dim, H/p, W/p)
   MLADecoder / LinearDecoder  (trainabile)
       ↓
@@ -27,7 +27,7 @@ Dipendenze:
 
 Usage
 -----
-    from models.DOFA import DOFASeg, S2_WAVELENGTHS
+    from models.dofa import DOFASeg, S2_WAVELENGTHS
 
     # Backbone frozen, fine-tune solo decoder
     model = DOFASeg(variant="base", num_classes=14, pretrained=True, freeze_backbone=True)

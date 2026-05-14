@@ -1,9 +1,9 @@
 """
-models/CrossEarth
+models/crossearth
 -----------------
-CrossEarth: DINOv2 + Rein PEFT adapter for remote sensing semantic segmentation.
+crossearth: DINOv2 + Rein PEFT adapter for remote sensing semantic segmentation.
 
-Paper:  "CrossEarth: Geospatial Vision Foundation Model for Domain
+Paper:  "crossearth: Geospatial Vision Foundation Model for Domain
          Generalizable Remote Sensing Semantic Segmentation"
         TPAMI 2025 — https://arxiv.org/abs/2410.22629
 

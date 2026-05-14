@@ -28,9 +28,9 @@ with nn.Identity(), which is mathematically equivalent after convergence
 
 Usage
 -----
-    from models.DeepLabV3Plus import DeepLabV3Plus
+    from models.deeplabv3plus import deeplabv3plus
 
-    model = DeepLabV3Plus(
+    model = deeplabv3plus(
         backbone    = "resnet101",
         in_channels = 12,
         num_classes = 14,

@@ -1,11 +1,11 @@
 """
-models/DeepLabV3Plus
+models/deeplabv3plus
 --------------------
 DeepLabV3+ for multispectral remote sensing semantic segmentation.
 
 Public API
 ----------
-    DeepLabV3Plus        – full model
+    deeplabv3plus        – full model
     DeepLabBackbone      – standalone backbone
     DeepLabV3PlusDecoder – standalone decoder
 """

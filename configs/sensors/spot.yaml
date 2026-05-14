@@ -1,0 +1,29 @@
+name: SPOT-6-7
+
+label_mapping:
+  invalid_pixel: 0
+  sealed_soil: 1
+  non_sealed_soil: 3
+
+band_names:
+  - blue
+  - green
+  - red
+  - nir
+
+wavelengths:
+  - 0.490
+  - 0.560
+  - 0.660
+  - 0.830
+
+bit_depth: 12
+gsd_m: 3
+tile_size_px: [512, 512]
+
+# Indici 0-based: [R, G, B, NIR]
+rgbnir_idx:
+  - 2   # red
+  - 1   # green
+  - 0   # blue
+  - 3   # nir

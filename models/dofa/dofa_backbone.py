@@ -1,11 +1,11 @@
 """
-DOFA Backbone – wrapper around torchgeo
+dofa Backbone – wrapper around torchgeo
 ----------------------------------------
-Imports DOFA directly from torchgeo (dofa_base_patch16_224 /
+Imports dofa directly from torchgeo (dofa_base_patch16_224 /
 dofa_large_patch16_224) and adds forward hooks on the transformer
 blocks to extract multi-scale features for segmentation.
 
-DOFA is a plain ViT with wave-dynamic DOFAEmbedding instead of the
+dofa is a plain ViT with wave-dynamic DOFAEmbedding instead of the
 standard patch embedding — it accepts images with any number of
 bands as long as wavelengths are provided in µm.
 
@@ -24,7 +24,7 @@ from torchgeo.models import (
     dofa_small_patch16_224,
     dofa_base_patch16_224,
     dofa_large_patch16_224,
-    dofa_huge_patch14_224,
+    #dofa_huge_patch14_224,
     DOFABase16_Weights,
     DOFALarge16_Weights,
 )
@@ -47,7 +47,7 @@ _FACTORIES = {
     "small": dofa_small_patch16_224,
     "base" : dofa_base_patch16_224,
     "large": dofa_large_patch16_224,
-    "huge" : dofa_huge_patch14_224,
+    #"huge" : dofa_huge_patch14_224,
 }
 
 _WEIGHTS = {
@@ -58,7 +58,7 @@ _WEIGHTS = {
 
 class DOFABackbone(nn.Module):
     """
-    DOFA backbone with multi-scale extraction via forward hooks.
+    dofa backbone with multi-scale extraction via forward hooks.
 
     Parameters
     ----------

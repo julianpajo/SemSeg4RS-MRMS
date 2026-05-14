@@ -1,0 +1,6 @@
+.idea/
+configs/splits/*
+configs/training/*
+data/
+outputs/
+*/__pycache__/

@@ -1,0 +1,37 @@
+name: PlanetScope-8B
+
+label_mapping:
+  invalid_pixel: 0
+  sealed_soil: 1
+  non_sealed_soil: 2
+
+band_names:
+  - coastal
+  - blue
+  - green_i
+  - green
+  - yellow
+  - red
+  - red_edge
+  - nir
+
+wavelengths:
+  - 0.443
+  - 0.490
+  - 0.531
+  - 0.565
+  - 0.610
+  - 0.665
+  - 0.705
+  - 0.865
+
+bit_depth: 16
+gsd_m: 3.0
+tile_size_px: [512, 512]
+
+# Indici 0-based: [R, G, B, NIR]
+rgbnir_idx:
+  - 5   # red
+  - 3   # green
+  - 1   # blue
+  - 7   # nir

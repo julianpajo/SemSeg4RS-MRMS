@@ -1,5 +1,5 @@
 """
-Decoder for CrossEarth
+Decoder for crossearth
 -----------------------
 DINOv2 produces 4 feature maps at the same resolution (H/14, W/14),
 all with embed_dim channels. It is not a hierarchical encoder like MiT.
@@ -10,7 +10,7 @@ Two available decoders:
     Fuses the 4 feature maps with a linear projection and produces
     full-resolution logits. Used for baselines or limited resources.
 
-  MLADecoder  (Multi-Level Aggregation, recommended for CrossEarth)
+  MLADecoder  (Multi-Level Aggregation, recommended for crossearth)
     Projects each scale → decoder_dim, sums them, refines with Conv3×3,
     then upsamples. More faithful to the multi-scale spirit of the paper.
 """
@@ -76,7 +76,7 @@ class MLADecoder(nn.Module):
     progressively (from deepest to shallowest), then refined with Conv3×3
     and upsampled.
 
-    More faithful to the architecture used in CrossEarth/Rein with DINOv2.
+    More faithful to the architecture used in crossearth/Rein with DINOv2.
 
     Parameters
     ----------

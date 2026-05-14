@@ -1,7 +1,7 @@
 """
-Decoder for DOFA Segmentation
+Decoder for dofa Segmentation
 --------------------------------
-DOFA is a plain ViT → all 4 feature maps come out at the same
+dofa is a plain ViT → all 4 feature maps come out at the same
 spatial resolution (H/patch_size, W/patch_size) with embed_dim channels.
 
 Two decoders:

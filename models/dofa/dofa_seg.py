@@ -3,14 +3,14 @@ DOFASeg – Full Segmentation Model
 ----------------------------------
 Assembles:
   DOFABackbone  (dofa_backbone.py)
-    └── DOFA from torchgeo  ← pretrained wave-dynamic backbone, optionally frozen
+    └── dofa from torchgeo  ← pretrained wave-dynamic backbone, optionally frozen
         ↓  [F1, F2, F3, F4] — (B, embed_dim, H/p, W/p) each
   MLADecoder / LinearDecoder  (decoder.py)
         ↓
   logits  (B, num_classes, H, W)
 
 What comes from torchgeo (zero custom code):
-  - Full DOFA (dofa_base_patch16_224, dofa_large_patch16_224)
+  - Full dofa (dofa_base_patch16_224, dofa_large_patch16_224)
   - DOFABase16_Weights.DOFA_MAE / DOFALarge16_Weights.DOFA_MAE
   - DOFAEmbedding (wave-dynamic patch embedding, inside torchgeo)
 
@@ -26,7 +26,7 @@ Trainable parameters (base, unfrozen backbone):
 
 Usage
 -----
-    from models.DOFA import DOFASeg
+    from models.dofa import DOFASeg
 
     # With pretrained frozen backbone (fine-tune decoder only)
     model = DOFASeg(variant="base", num_classes=14, pretrained=True, freeze_backbone=True)
