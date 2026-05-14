@@ -481,24 +481,15 @@ or:
 outputs/checkpoints/crossearth_scratch/best.pth
 ```
 
-### Example: PlanetScope Inference with CrossEarth
+### Example: Single Prediction - PlanetScope with CrossEarth
 
 ```powershell
 python inference/predict_tile.py --image data/raw/planetscope/images/S4-02-01a-VA1_train_autumn_gt-012-015_512_7680.tif --sensor-config configs/sensors/planetscope.yaml --checkpoint outputs/checkpoints/crossearth_finetune/best.pth --output outputs/predictions/crossearth_planetscope_pred.tif --device cuda:0 --output-mode qgis --amp
 ```
 
-Output:
+### Example: Batch Prediction - PlanetScope with CrossEarth
 
-```text
-outputs/predictions/crossearth_planetscope_pred.tif
+```powershell
+python inference/predict_folder.py --input-dir data/raw/planetscope/images --sensor-config configs/sensors/planetscope.yaml --checkpoint outputs/checkpoints/crossearth_finetune/best.pth --output-dir outputs/predictions/crossearth/planetscope --device cuda:0 --recursive --skip-existing
 ```
-
-QGIS output classes:
-
-```text
-0 = invalid / nodata
-1 = sealed_soil
-2 = non_sealed_soil
-```
-
 ---
