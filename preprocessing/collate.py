@@ -443,7 +443,25 @@ class ModelAdapter:
         kwargs: Dict[str, Any] = {}
 
         if self.model_type in self.WAVELENGTH_MODELS:
-            kwargs["wavelengths"] = batch.get("wavelengths")
+            wavelengths = batch.get("wavelengths")
+
+            # Collate returns list[list[float]]:
+            #   batch["wavelengths"] = [[...], [...], ...]
+            # For mono-sensor batches, all entries should be identical.
+            # DOFA expects one wavelength list, not one list per sample.
+            if isinstance(wavelengths, list) and len(wavelengths) > 0:
+                first = wavelengths[0]
+
+                if isinstance(first, list):
+                    for w in wavelengths[1:]:
+                        if w != first:
+                            raise ValueError(
+                                "DOFA received a mixed-wavelength batch. "
+                                "Use SensorBatchSampler or dofa_pad_collate."
+                            )
+                    wavelengths = first
+
+            kwargs["wavelengths"] = wavelengths
 
             if self.use_band_mask and "band_mask" in batch:
                 kwargs["band_mask"] = batch["band_mask"].to(

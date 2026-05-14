@@ -490,6 +490,6 @@ python inference/predict_tile.py --image data/raw/planetscope/images/S4-02-01a-V
 ### Example: Batch Prediction - PlanetScope with CrossEarth
 
 ```powershell
-python inference/predict_folder.py --input-dir data/raw/planetscope/images --sensor-config configs/sensors/planetscope.yaml --checkpoint outputs/checkpoints/crossearth_finetune/best.pth --output-dir outputs/predictions/crossearth/planetscope --device cuda:0 --recursive --skip-existing
+python inference/predict_folder.py --model crossearth --input-dir data/raw/planetscope/images --sensor-config configs/sensors/planetscope.yaml --checkpoint outputs/checkpoints/crossearth_finetune/best.pth --output-dir outputs/predictions/crossearth/planetscope --device cuda:0 --recursive --skip-existing
 ```
 ---

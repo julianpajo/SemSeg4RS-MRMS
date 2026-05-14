@@ -2,18 +2,11 @@
 inference/predict_folder.py
 ---------------------------
 
-Inference on all GeoTIFF files inside a folder using one CrossEarth checkpoint.
-
-Example
--------
-    python inference/predict_folder.py ^
-      --input-dir data/raw/planetscope/images ^
-      --sensor-config configs/sensors/planetscope.yaml ^
-      --checkpoint outputs/checkpoints/crossearth_finetune/best.pth ^
-      --output-dir outputs/predictions/crossearth/planetscope ^
-      --device cuda:0 ^
-      --recursive ^
-      --skip-existing
+Generic folder inference for:
+  - crossearth
+  - dofa
+  - deeplabv3plus
+  - segformer_sae
 """
 
 from __future__ import annotations
@@ -21,7 +14,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -34,7 +27,6 @@ from tqdm import tqdm
 
 from configs.sensor_configs import read_sensor
 from preprocessing.preprocess import preprocess_image_for_model
-from models.crossearth import CrossEarthSeg
 
 
 # ---------------------------------------------------------------------
@@ -42,9 +34,6 @@ from models.crossearth import CrossEarthSeg
 # ---------------------------------------------------------------------
 
 def load_checkpoint_state(path: str | Path) -> Dict[str, torch.Tensor]:
-    """
-    Load the model state_dict from a checkpoint file.
-    """
     ckpt = torch.load(path, map_location="cpu")
 
     if isinstance(ckpt, dict):
@@ -59,9 +48,6 @@ def load_checkpoint_state(path: str | Path) -> Dict[str, torch.Tensor]:
 
 
 def strip_module_prefix(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-    """
-    Remove the 'module.' prefix from checkpoint keys, if present.
-    """
     out = {}
 
     for k, v in state_dict.items():
@@ -84,19 +70,12 @@ def update_transform_after_resize(
     new_height: int,
     new_width: int,
 ):
-    """
-    Update affine transform after resizing while preserving geographic extent.
-    """
     scale_x = old_width / new_width
     scale_y = old_height / new_height
-
     return old_transform * Affine.scale(scale_x, scale_y)
 
 
 def make_invalid_mask(x_raw: np.ndarray, nodata_value) -> np.ndarray:
-    """
-    Create invalid mask from raster nodata value.
-    """
     if nodata_value is None:
         return np.zeros(x_raw.shape[-2:], dtype=bool)
 
@@ -104,18 +83,11 @@ def make_invalid_mask(x_raw: np.ndarray, nodata_value) -> np.ndarray:
 
 
 def find_geotiffs(input_dir: Path, recursive: bool) -> List[Path]:
-    """
-    Find GeoTIFF files inside a folder.
-    """
     patterns = ["*.tif", "*.tiff", "*.TIF", "*.TIFF"]
-
     files: List[Path] = []
 
     for pattern in patterns:
-        if recursive:
-            files.extend(input_dir.rglob(pattern))
-        else:
-            files.extend(input_dir.glob(pattern))
+        files.extend(input_dir.rglob(pattern) if recursive else input_dir.glob(pattern))
 
     return sorted(set(files))
 
@@ -127,11 +99,6 @@ def build_output_path(
     suffix: str,
     recursive: bool,
 ) -> Path:
-    """
-    Build output prediction path.
-
-    If recursive=True, the input folder structure is preserved.
-    """
     if recursive:
         rel = image_path.relative_to(input_dir)
         return output_dir / rel.parent / f"{rel.stem}{suffix}.tif"
@@ -140,34 +107,73 @@ def build_output_path(
 
 
 # ---------------------------------------------------------------------
-# Model
+# Model factory
 # ---------------------------------------------------------------------
 
-def build_crossearth_model(device: torch.device) -> CrossEarthSeg:
-    """
-    Build CrossEarth model with RGBNIR configuration.
-    """
-    model = CrossEarthSeg.from_pretrained(
-        variant="dinov2_vitl14_reg",
-        num_classes=2,
-        in_channels=4,
-        decoder="mla",
-        patch_embed_init="rgb_mean",
-        freeze_backbone=True,
-        train_patch_embed=True,
-    )
+def build_model(model_name: str, device: torch.device) -> torch.nn.Module:
+    model_name = model_name.lower()
+
+    if model_name == "crossearth":
+        from models.crossearth import CrossEarthSeg
+
+        model = CrossEarthSeg.from_pretrained(
+            variant="dinov2_vitl14_reg",
+            num_classes=2,
+            in_channels=4,
+            decoder="mla",
+            patch_embed_init="rgb_mean",
+            freeze_backbone=True,
+            train_patch_embed=True,
+        )
+
+    elif model_name == "dofa":
+        from models.dofa import DOFASeg
+
+        model = DOFASeg(
+            variant="base",
+            num_classes=2,
+            pretrained=True,
+            freeze_backbone=True,
+            decoder="mla",
+        )
+
+    elif model_name == "deeplabv3plus":
+        from models.deeplabv3plus import DeepLabV3Plus
+
+        model = DeepLabV3Plus(
+            backbone="resnet101",
+            in_channels=4,
+            num_classes=2,
+            pretrained_backbone=False,
+        )
+
+    elif model_name == "segformer_sae":
+        from models.segformer_sae import SegFormerSAE
+
+        model = SegFormerSAE(
+            variant="mit-b2",
+            in_channels=4,
+            num_classes=2,
+            use_brd=True,
+        )
+
+    else:
+        raise ValueError(
+            f"Unsupported model: {model_name}. "
+            "Choose one of: crossearth, dofa, deeplabv3plus, segformer_sae"
+        )
 
     model = model.to(device)
     model.eval()
-
     return model
 
 
-def load_model(checkpoint_path: Path, device: torch.device) -> CrossEarthSeg:
-    """
-    Build CrossEarth and load checkpoint weights.
-    """
-    model = build_crossearth_model(device)
+def load_model(
+    model_name: str,
+    checkpoint_path: Path,
+    device: torch.device,
+) -> torch.nn.Module:
+    model = build_model(model_name, device)
 
     state = load_checkpoint_state(checkpoint_path)
     state = strip_module_prefix(state)
@@ -183,8 +189,25 @@ def load_model(checkpoint_path: Path, device: torch.device) -> CrossEarthSeg:
         print("  first:", unexpected[:5])
 
     model.eval()
-
     return model
+
+
+# ---------------------------------------------------------------------
+# Forward adapter
+# ---------------------------------------------------------------------
+
+def forward_model(
+    model: torch.nn.Module,
+    model_name: str,
+    x_tensor: torch.Tensor,
+    wavelengths: List[float],
+):
+    model_name = model_name.lower()
+
+    if model_name == "dofa":
+        return model(x_tensor, wavelengths=wavelengths)
+
+    return model(x_tensor)
 
 
 # ---------------------------------------------------------------------
@@ -196,15 +219,13 @@ def predict_one(
     image_path: Path,
     output_path: Path,
     sensor_config_path: Path,
-    model: CrossEarthSeg,
+    model: torch.nn.Module,
+    model_name: str,
     device: torch.device,
     output_mode: str,
     apply_nodata_mask: bool,
     amp: bool,
 ) -> None:
-    """
-    Run inference on one GeoTIFF and save prediction.
-    """
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     with rasterio.open(image_path) as src:
@@ -222,16 +243,21 @@ def predict_one(
         sensor_config_path=str(sensor_config_path),
     )
 
-    x_proc, _ = preprocess_image_for_model(
+    x_proc, wavelengths = preprocess_image_for_model(
         x=x_raw,
         info=info,
-        model_name="crossearth",
+        model_name=model_name,
     )
 
     x_tensor = torch.from_numpy(x_proc).float().unsqueeze(0).to(device)
 
     with torch.cuda.amp.autocast(enabled=(device.type == "cuda" and amp)):
-        logits = model(x_tensor)
+        logits = forward_model(
+            model=model,
+            model_name=model_name,
+            x_tensor=x_tensor,
+            wavelengths=[float(w) for w in wavelengths],
+        )
 
     pred_train = torch.argmax(logits, dim=1)[0].cpu().numpy().astype(np.uint8)
 
@@ -293,13 +319,11 @@ def predict_one(
 # ---------------------------------------------------------------------
 
 def predict_folder(args: argparse.Namespace) -> None:
-    """
-    Run inference on all GeoTIFF files in a folder.
-    """
     input_dir = Path(args.input_dir)
     output_dir = Path(args.output_dir)
     sensor_config_path = Path(args.sensor_config)
     checkpoint_path = Path(args.checkpoint)
+    model_name = args.model.lower()
 
     if not input_dir.exists():
         raise FileNotFoundError(f"Input folder not found: {input_dir}")
@@ -322,8 +346,9 @@ def predict_folder(args: argparse.Namespace) -> None:
     )
 
     print("=" * 80)
-    print("CROSSEARTH FOLDER INFERENCE")
+    print("FOLDER INFERENCE")
     print("=" * 80)
+    print("Model        :", model_name)
     print("Input dir    :", input_dir)
     print("Output dir   :", output_dir)
     print("Sensor config:", sensor_config_path)
@@ -335,11 +360,17 @@ def predict_folder(args: argparse.Namespace) -> None:
     print("Skip existing:", args.skip_existing)
     print("=" * 80)
 
-    model = load_model(checkpoint_path, device)
+    model = load_model(
+        model_name=model_name,
+        checkpoint_path=checkpoint_path,
+        device=device,
+    )
 
     errors = []
+    skipped = 0
+    processed = 0
 
-    for image_path in tqdm(files, desc="Predicting"):
+    for image_path in tqdm(files, desc=f"Predicting {model_name}"):
         output_path = build_output_path(
             image_path=image_path,
             input_dir=input_dir,
@@ -349,6 +380,7 @@ def predict_folder(args: argparse.Namespace) -> None:
         )
 
         if args.skip_existing and output_path.exists():
+            skipped += 1
             continue
 
         try:
@@ -357,11 +389,13 @@ def predict_folder(args: argparse.Namespace) -> None:
                 output_path=output_path,
                 sensor_config_path=sensor_config_path,
                 model=model,
+                model_name=model_name,
                 device=device,
                 output_mode=args.output_mode,
                 apply_nodata_mask=args.apply_nodata_mask,
                 amp=args.amp,
             )
+            processed += 1
 
         except Exception as exc:
             errors.append(
@@ -379,7 +413,8 @@ def predict_folder(args: argparse.Namespace) -> None:
 
     print("=" * 80)
     print("DONE")
-    print("Processed :", len(files) - len(errors))
+    print("Processed :", processed)
+    print("Skipped   :", skipped)
     print("Errors    :", len(errors))
     print("Output dir:", output_dir)
 
@@ -396,10 +431,15 @@ def predict_folder(args: argparse.Namespace) -> None:
 # ---------------------------------------------------------------------
 
 def parse_args() -> argparse.Namespace:
-    """
-    Parse command-line arguments for folder inference.
-    """
     parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--model",
+        type=str,
+        required=True,
+        choices=["crossearth", "dofa", "deeplabv3plus", "segformer_sae"],
+        help="Model used for inference.",
+    )
 
     parser.add_argument(
         "--input-dir",
@@ -419,7 +459,7 @@ def parse_args() -> argparse.Namespace:
         "--checkpoint",
         type=str,
         required=True,
-        help="Model checkpoint, e.g. outputs/checkpoints/crossearth/best.pth.",
+        help="Model checkpoint.",
     )
 
     parser.add_argument(

@@ -453,63 +453,70 @@ def build_optimizer_for_model(
     train_cfg: Dict[str, Any],
 ) -> torch.optim.Optimizer:
     """
-    Build the optimizer.
+    Build optimizer.
 
-    If the model exposes parameter_groups(), those groups are used.
+    If the model exposes parameter_groups(), only the arguments accepted by
+    that specific model are passed.
 
-    This is important for CrossEarth because it allows different learning rates
-    for:
-
-      - patch_embed;
-      - Rein;
-      - decoder;
-      - optional backbone_extra.
-
-    Otherwise, the standard build_optimizer() from train.utils is used.
-
-    Parameters
-    ----------
-    model :
-        Model to optimize.
-    train_cfg :
-        Training configuration section.
-
-    Returns
-    -------
-    torch.optim.Optimizer
-        Initialized optimizer.
-
-    Raises
-    ------
-    ValueError
-        If the optimizer name is unsupported.
+    This avoids passing CrossEarth-specific arguments such as lr_patch_embed
+    to models like DOFA.
     """
+    import inspect
+
     opt_name = train_cfg.get("optimizer", "adamw").lower()
+    weight_decay = float(train_cfg.get("weight_decay", 0.01))
 
     if hasattr(model, "parameter_groups"):
-        groups = model.parameter_groups(
-            lr_patch_embed=float(train_cfg.get("lr_patch_embed", 1e-5)),
-            lr_rein=float(train_cfg.get("lr_rein", 1e-4)),
-            lr_decoder=float(train_cfg.get("lr_decoder", 1e-3)),
-            lr_backbone=float(train_cfg.get("lr_backbone", 1e-5)),
-            weight_decay=float(train_cfg.get("weight_decay", 0.01)),
+        sig = inspect.signature(model.parameter_groups)
+        accepted = set(sig.parameters.keys())
+
+        candidate_kwargs = {
+            # Generic
+            "lr": float(train_cfg.get("lr", 1e-4)),
+            "lr_encoder": float(train_cfg.get("lr_backbone", train_cfg.get("lr", 1e-4) / 10)),
+            "lr_backbone": float(train_cfg.get("lr_backbone", train_cfg.get("lr", 1e-4) / 10)),
+            "lr_decoder": float(train_cfg.get("lr_decoder", train_cfg.get("lr", 1e-4))),
+            "lr_head": float(train_cfg.get("lr", 1e-4)),
+            "lr_sae": float(train_cfg.get("lr", 1e-4)),
+
+            # CrossEarth-specific
+            "lr_patch_embed": float(train_cfg.get("lr_patch_embed", 1e-5)),
+            "lr_rein": float(train_cfg.get("lr_rein", 1e-4)),
+
+            # Common
+            "weight_decay": weight_decay,
+        }
+
+        kwargs = {
+            k: v for k, v in candidate_kwargs.items()
+            if k in accepted
+        }
+
+        groups = model.parameter_groups(**kwargs)
+
+    else:
+        lr = float(train_cfg.get("lr", 1e-4))
+        groups = [
+            {
+                "params": model.parameters(),
+                "lr": lr,
+                "weight_decay": weight_decay,
+            }
+        ]
+
+    if opt_name == "adamw":
+        return torch.optim.AdamW(groups)
+
+    if opt_name == "adam":
+        return torch.optim.Adam(groups)
+
+    if opt_name == "sgd":
+        return torch.optim.SGD(
+            groups,
+            momentum=float(train_cfg.get("momentum", 0.9)),
         )
 
-        if opt_name == "adamw":
-            return torch.optim.AdamW(groups)
-
-        if opt_name == "adam":
-            return torch.optim.Adam(groups)
-
-        if opt_name == "sgd":
-            return torch.optim.SGD(
-                groups,
-                momentum=float(train_cfg.get("momentum", 0.9)),
-            )
-
-        raise ValueError(f"Unsupported optimizer: {opt_name}")
-
-    return build_optimizer(model, train_cfg)
+    raise ValueError(f"Unsupported optimizer: {opt_name}")
 
 
 # ---------------------------------------------------------------------------

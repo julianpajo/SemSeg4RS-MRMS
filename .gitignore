@@ -3,4 +3,4 @@ configs/splits/*
 configs/training/*
 data/
 outputs/
-*/__pycache__/
+__pycache__/
