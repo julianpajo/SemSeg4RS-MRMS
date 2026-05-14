@@ -1,5 +1,5 @@
 """
-train/train.py
+train/run_train.py
 --------------
 
 Unified training script for all models.
@@ -32,30 +32,37 @@ Therefore:
 
 Usage
 -----
-    python train/train.py --config configs/training/crossearth_spot.yaml
+    python train/run_train.py --config configs/training/crossearth_spot.yaml
 
 Resume
 ------
-    python train/train.py --config configs/training/crossearth_spot.yaml --resume outputs/checkpoints/crossearth/last.pth
+    python train/run_train.py --config configs/training/crossearth_spot.yaml --resume outputs/checkpoints/crossearth/last.pth
 
 Device
 ------
-    python train/train.py --config configs/training/crossearth_spot.yaml --device cuda:0
+    python train/run_train.py --config configs/training/crossearth_spot.yaml --device cuda:0
 """
 
 from __future__ import annotations
 
-import argparse
 import sys
-import time
 from pathlib import Path
 from typing import Any, Dict
-
+from torch.utils.data import DataLoader
 import torch
 import torch.nn as nn
 import yaml
-from torch.utils.data import DataLoader
 
+from preprocessing.dataset import MultiSensorSegDataset
+from preprocessing.collate import (
+    SensorBatchSampler,
+    segmentation_collate,
+    dofa_pad_collate,
+)
+from preprocessing.transforms import (
+    SegmentationTrainTransform,
+    SegmentationEvalTransform,
+)
 
 # ---------------------------------------------------------------------------
 # Project root path
@@ -63,35 +70,6 @@ from torch.utils.data import DataLoader
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-
-
-# ---------------------------------------------------------------------------
-# Internal imports
-# ---------------------------------------------------------------------------
-
-from losses import build_loss
-
-from utils import (
-    build_optimizer,
-    build_scheduler,
-    SegMetrics,
-    AverageMeter,
-    save_checkpoint,
-    load_checkpoint,
-)
-
-from preprocessing.dataset import MultiSensorSegDataset
-from preprocessing.collate import (
-    SensorBatchSampler,
-    segmentation_collate,
-    dofa_pad_collate,
-    ModelAdapter,
-)
-from preprocessing.transforms import (
-    SegmentationTrainTransform,
-    SegmentationEvalTransform,
-)
-
 
 # ---------------------------------------------------------------------------
 # Utilities
@@ -145,7 +123,6 @@ def load_samples(path_or_list):
         return load_yaml(path_or_list)
 
     return path_or_list
-
 
 def get_model_type(cfg: Dict[str, Any]) -> str:
     """
@@ -295,16 +272,7 @@ def apply_train_mode_overrides(
     return cfg
 
 
-def make_output_dir(path: str | Path) -> None:
-    """
-    Create an output directory if it does not already exist.
 
-    Parameters
-    ----------
-    path :
-        Directory path to create.
-    """
-    Path(path).mkdir(parents=True, exist_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -519,51 +487,6 @@ def build_optimizer_for_model(
     raise ValueError(f"Unsupported optimizer: {opt_name}")
 
 
-# ---------------------------------------------------------------------------
-# Data
-# ---------------------------------------------------------------------------
-
-def build_transforms(cfg: Dict[str, Any], split: str):
-    """
-    Build train/validation transforms.
-
-    Augmentation can be disabled with:
-
-        data:
-          use_augmentation: false
-
-    Parameters
-    ----------
-    cfg :
-        Training configuration dictionary.
-    split :
-        Dataset split, either "train" or "val".
-
-    Returns
-    -------
-    callable
-        Transform callable.
-    """
-    data_cfg = cfg.get("data", {})
-
-    if split == "train":
-        if not bool(data_cfg.get("use_augmentation", True)):
-            return SegmentationEvalTransform()
-
-        aug_cfg = data_cfg.get("augmentation", {})
-
-        return SegmentationTrainTransform(
-            p_hflip=float(aug_cfg.get("p_hflip", 0.5)),
-            p_vflip=float(aug_cfg.get("p_vflip", 0.5)),
-            p_rotate=float(aug_cfg.get("p_rotate", 0.5)),
-            brightness=float(aug_cfg.get("brightness", 0.05)),
-            contrast=float(aug_cfg.get("contrast", 0.10)),
-            noise_std=float(aug_cfg.get("noise_std", 0.01)),
-        )
-
-    return SegmentationEvalTransform()
-
-
 def build_datasets(cfg: Dict[str, Any]):
     """
     Build train and validation datasets.
@@ -766,504 +689,151 @@ def build_loaders(cfg: Dict[str, Any], train_ds, val_ds):
 
     return train_loader, val_loader
 
-
 # ---------------------------------------------------------------------------
-# Train / Val loop
+# Data
 # ---------------------------------------------------------------------------
 
-def train_one_epoch(
-    model: nn.Module,
-    loader: DataLoader,
-    criterion: nn.Module,
-    optimizer: torch.optim.Optimizer,
-    scheduler,
-    adapter: ModelAdapter,
-    device: torch.device,
-    epoch: int,
-    log_every: int = 20,
-    grad_clip: float = 1.0,
-    amp_enabled: bool = False,
-) -> Dict[str, float]:
+def build_transforms(cfg: Dict[str, Any], split: str):
     """
-    Train the model for one epoch.
+    Build train/validation transforms.
+
+    Augmentation can be disabled with:
+
+        data:
+          use_augmentation: false
 
     Parameters
     ----------
-    model :
-        Model to train.
-    loader :
-        Training DataLoader.
-    criterion :
-        Loss module returning a dictionary with at least key "loss".
-    optimizer :
-        Optimizer.
-    scheduler :
-        Learning-rate scheduler, stepped after each optimizer step.
-    adapter :
-        ModelAdapter used to move batches to device and call the model.
-    device :
-        Training device.
-    epoch :
-        Current epoch index.
-    log_every :
-        Logging frequency in steps.
-    grad_clip :
-        Maximum gradient norm. If <= 0, gradient clipping is disabled.
-    amp_enabled :
-        If True, use automatic mixed precision.
+    cfg :
+        Training configuration dictionary.
+    split :
+        Dataset split, either "train" or "val".
 
     Returns
     -------
-    dict
-        Average training losses for the epoch.
+    callable
+        Transform callable.
     """
-    model.train()
+    data_cfg = cfg.get("data", {})
 
-    meters: Dict[str, AverageMeter] = {}
+    if split == "train":
+        if not bool(data_cfg.get("use_augmentation", True)):
+            return SegmentationEvalTransform()
 
-    scaler = torch.cuda.amp.GradScaler(enabled=amp_enabled)
+        aug_cfg = data_cfg.get("augmentation", {})
 
-    for step, batch in enumerate(loader):
-        optimizer.zero_grad(set_to_none=True)
+        return SegmentationTrainTransform(
+            p_hflip=float(aug_cfg.get("p_hflip", 0.5)),
+            p_vflip=float(aug_cfg.get("p_vflip", 0.5)),
+            p_rotate=float(aug_cfg.get("p_rotate", 0.5)),
+            brightness=float(aug_cfg.get("brightness", 0.05)),
+            contrast=float(aug_cfg.get("contrast", 0.10)),
+            noise_std=float(aug_cfg.get("noise_std", 0.01)),
+        )
 
-        with torch.cuda.amp.autocast(enabled=amp_enabled):
-            logits, labels = adapter.forward(model, batch)
-            loss_dict = criterion(logits, labels)
-            loss = loss_dict["loss"]
-
-        scaler.scale(loss).backward()
-
-        if grad_clip is not None and grad_clip > 0:
-            scaler.unscale_(optimizer)
-            nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip)
-
-        scaler.step(optimizer)
-        scaler.update()
-
-        if scheduler is not None:
-            scheduler.step()
-
-        batch_size = labels.shape[0]
-
-        for key, value in loss_dict.items():
-            if key not in meters:
-                meters[key] = AverageMeter()
-
-            meters[key].update(float(value.detach().cpu()), batch_size)
-
-        if (step + 1) % log_every == 0:
-            if scheduler is not None:
-                lr = scheduler.get_last_lr()[0]
-            else:
-                lr = optimizer.param_groups[0]["lr"]
-
-            log = "  ".join(
-                f"{key}={meter.avg:.4f}"
-                for key, meter in meters.items()
-            )
-
-            print(
-                f"  Epoch {epoch:03d} | "
-                f"step {step + 1:04d}/{len(loader)} | "
-                f"{log}  lr={lr:.2e}"
-            )
-
-    return {
-        key: meter.avg
-        for key, meter in meters.items()
-    }
+    return SegmentationEvalTransform()
 
 
-@torch.no_grad()
-def validate(
-    model: nn.Module,
-    loader: DataLoader,
-    criterion: nn.Module,
-    adapter: ModelAdapter,
-    device: torch.device,
-    num_classes: int,
-    ignore_index: int = 255,
-    amp_enabled: bool = False,
-) -> Dict[str, Any]:
+def build_datasets(cfg: Dict[str, Any]):
     """
-    Validate the model.
+    Build train and validation datasets.
+
+    Supported modes
+    ---------------
+    1. data.preprocessed: false
+
+       Uses MultiSensorSegDataset and reads raw GeoTIFF files.
+       Preprocessing is performed online.
+
+    2. data.preprocessed: true
+
+       Uses ProcessedSegDataset and reads already preprocessed GeoTIFF files.
+       Preprocessing is NOT repeated.
 
     Parameters
     ----------
-    model :
-        Model to evaluate.
-    loader :
-        Validation DataLoader.
-    criterion :
-        Loss module returning a dictionary with at least key "loss".
-    adapter :
-        ModelAdapter used to move batches to device and call the model.
-    device :
-        Evaluation device.
-    num_classes :
-        Number of semantic classes.
-    ignore_index :
-        Label value ignored by metrics and loss.
-    amp_enabled :
-        If True, use automatic mixed precision.
+    cfg :
+        Training configuration dictionary.
 
     Returns
     -------
-    dict
-        Validation losses and segmentation metrics.
+    tuple
+        train_ds, val_ds.
     """
-    model.eval()
-
-    metrics = SegMetrics(
-        num_classes=num_classes,
-        ignore_index=ignore_index,
-    )
-
-    meters: Dict[str, AverageMeter] = {}
-
-    for batch in loader:
-        with torch.cuda.amp.autocast(enabled=amp_enabled):
-            logits, labels = adapter.forward(model, batch)
-            loss_dict = criterion(logits, labels)
-
-        batch_size = labels.shape[0]
-
-        for key, value in loss_dict.items():
-            if key not in meters:
-                meters[key] = AverageMeter()
-
-            meters[key].update(float(value.detach().cpu()), batch_size)
-
-        preds = logits.argmax(dim=1)
-        metrics.update(preds, labels)
-
-    results = metrics.compute()
-
-    for key, meter in meters.items():
-        results[key] = meter.avg
-
-    return results
-
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
-def main() -> None:
-    """
-    CLI entry point.
-
-    The function loads the YAML config, applies the selected training mode,
-    builds datasets, dataloaders, model, loss, optimizer and scheduler, then
-    runs the full training/validation loop with checkpointing.
-    """
-    parser = argparse.ArgumentParser()
-
-    parser.add_argument(
-        "--config",
-        required=True,
-        help="Path to the YAML config.",
-    )
-
-    parser.add_argument(
-        "--resume",
-        default=None,
-        help="Checkpoint to resume from.",
-    )
-
-    parser.add_argument(
-        "--device",
-        default=None,
-        help="Device, e.g. cuda:0 or cpu.",
-    )
-
-    parser.add_argument(
-        "--train-mode",
-        default="config",
-        choices=["config", "finetune", "scratch"],
-        help=(
-            "Training mode. "
-            "'config' uses the YAML; "
-            "'finetune' uses pretrained/frozen settings where expected; "
-            "'scratch' disables pretrained weights and makes the backbone trainable."
-        ),
-    )
-
-    args = parser.parse_args()
-
-    # ------------------------------------------------------------------
-    # Config
-    # ------------------------------------------------------------------
-
-    cfg = load_yaml(args.config)
-    cfg = apply_train_mode_overrides(cfg, args.train_mode)
-
+    data_cfg = cfg["data"]
     model_type = get_model_type(cfg)
-    num_classes = get_num_classes(cfg)
 
-    print(f"[train] Train mode: {cfg.get('resolved_train_mode', 'config')}")
+    train_samples = load_samples(data_cfg["train_samples"])
+    val_samples = load_samples(data_cfg["val_samples"])
+
+    use_preprocessed = bool(data_cfg.get("preprocessed", False))
+
+    print(f"[train] Data mode: {'offline/preprocessed' if use_preprocessed else 'online/raw'}")
 
     # ------------------------------------------------------------------
-    # Device
+    # Offline / preprocessed mode
     # ------------------------------------------------------------------
+    if use_preprocessed:
+        from preprocessing.processed_dataset import ProcessedSegDataset
 
-    if args.device is not None:
-        device = torch.device(args.device)
-    elif cfg.get("device") is not None:
-        device = torch.device(cfg["device"])
-    else:
-        device = torch.device(
-            "cuda" if torch.cuda.is_available() else "cpu"
+        train_ds = ProcessedSegDataset(
+            samples=train_samples,
+            transform=build_transforms(cfg, split="train"),
+            return_meta=bool(data_cfg.get("return_meta", True)),
         )
 
-    print(f"[train] Device: {device}")
+        val_ds = ProcessedSegDataset(
+            samples=val_samples,
+            transform=build_transforms(cfg, split="val"),
+            return_meta=bool(data_cfg.get("return_meta", True)),
+        )
+
+        return train_ds, val_ds
 
     # ------------------------------------------------------------------
-    # Dataset / Loader
+    # Online / raw GeoTIFF mode
     # ------------------------------------------------------------------
 
-    print("\n[train] Building datasets...")
+    model_name = data_cfg.get("model_name", model_type)
 
-    train_ds, val_ds = build_datasets(cfg)
+    patch_size_px = data_cfg.get("patch_size_px", None)
+    patch_size_m = data_cfg.get("patch_size_m", None)
 
-    print("[train] Train dataset:")
-    print(train_ds.describe())
+    if patch_size_px is None and patch_size_m is None:
+        patch_size_px = 512
 
-    print("[train] Val dataset:")
-    print(val_ds.describe())
-
-    train_loader, val_loader = build_loaders(
-        cfg=cfg,
-        train_ds=train_ds,
-        val_ds=val_ds,
+    train_ds = MultiSensorSegDataset(
+        samples=train_samples,
+        model_name=model_name,
+        split="train",
+        patch_size_px=patch_size_px,
+        patch_size_m=patch_size_m,
+        stride_px=None,
+        max_invalid_frac=float(data_cfg.get("max_invalid_frac", 0.9)),
+        min_valid_frac=float(data_cfg.get("min_valid_frac", 0.1)),
+        min_valid_classes=int(data_cfg.get("min_valid_classes", 1)),
+        max_retries=int(data_cfg.get("max_retries", 20)),
+        remap_labels=bool(data_cfg.get("remap_labels", True)),
+        ignore_index=int(cfg.get("loss", {}).get("ignore_index", 255)),
+        transform=build_transforms(cfg, split="train"),
+        return_meta=bool(data_cfg.get("return_meta", True)),
     )
 
-    print(f"[train] Train loader steps: {len(train_loader)}")
-    print(f"[train] Val loader steps  : {len(val_loader)}")
-
-    # ------------------------------------------------------------------
-    # Model
-    # ------------------------------------------------------------------
-
-    print("\n[train] Building model...")
-
-    model = build_model(cfg).to(device)
-
-    print(f"[train] Model type: {model_type}")
-
-    if hasattr(model, "count_parameters"):
-        print("[train] Parameters:")
-        for key, value in model.count_parameters().items():
-            print(f"  {key:<30}: {value:>12,}")
-
-    # ------------------------------------------------------------------
-    # Loss
-    # ------------------------------------------------------------------
-
-    loss_cfg = cfg.get("loss", {})
-    ignore_index = int(loss_cfg.get("ignore_index", 255))
-
-    criterion = build_loss(
-        model_type=model_type,
-        num_classes=num_classes,
-        ignore_index=ignore_index,
-        lambda_dice=float(loss_cfg.get("lambda_dice", 0.5)),
-        lambda_focal=float(loss_cfg.get("lambda_focal", 0.5)),
-        gamma=float(loss_cfg.get("gamma", 2.0)),
-        class_weights=loss_cfg.get("class_weights", None),
-    ).to(device)
-
-    print(f"[train] Loss: {criterion.__class__.__name__}")
-
-    # ------------------------------------------------------------------
-    # Optimizer / Scheduler
-    # ------------------------------------------------------------------
-
-    train_cfg = cfg["training"]
-
-    epochs = int(train_cfg["epochs"])
-    steps_total = epochs * len(train_loader)
-
-    if steps_total <= 0:
-        raise RuntimeError(
-            "steps_total <= 0. Check dataset, batch_size and sampler."
-        )
-
-    warmup_steps = int(
-        train_cfg.get(
-            "warmup_steps",
-            min(500, max(1, steps_total // 10)),
-        )
+    val_ds = MultiSensorSegDataset(
+        samples=val_samples,
+        model_name=model_name,
+        split="val",
+        patch_size_px=patch_size_px,
+        patch_size_m=patch_size_m,
+        stride_px=data_cfg.get("stride_px", patch_size_px),
+        max_invalid_frac=float(data_cfg.get("max_invalid_frac", 0.9)),
+        min_valid_frac=float(data_cfg.get("min_valid_frac", 0.1)),
+        min_valid_classes=int(data_cfg.get("min_valid_classes", 1)),
+        max_retries=1,
+        remap_labels=bool(data_cfg.get("remap_labels", True)),
+        ignore_index=int(cfg.get("loss", {}).get("ignore_index", 255)),
+        transform=build_transforms(cfg, split="val"),
+        return_meta=bool(data_cfg.get("return_meta", True)),
     )
 
-    optimizer = build_optimizer_for_model(model, train_cfg)
-    scheduler = build_scheduler(
-        optimizer,
-        steps_total,
-        warmup_steps=warmup_steps,
-    )
-
-    print(f"[train] Optimizer: {optimizer.__class__.__name__}")
-    print(f"[train] Scheduler warmup steps: {warmup_steps}")
-    print(f"[train] Total steps: {steps_total}")
-
-    # ------------------------------------------------------------------
-    # Resume
-    # ------------------------------------------------------------------
-
-    start_epoch = 0
-    best_miou = 0.0
-
-    output_dir = Path(train_cfg.get("output_dir", "outputs"))
-    ckpt_dir = Path(train_cfg.get("checkpoint_dir", output_dir / "checkpoints"))
-
-    train_mode = cfg.get("resolved_train_mode", "config")
-
-    run_name = train_cfg.get(
-        "run_name",
-        f"{model_type}_{train_mode}",
-    )
-
-    ckpt_base = ckpt_dir / run_name
-
-    make_output_dir(ckpt_base)
-
-    if args.resume is not None:
-        ckpt = load_checkpoint(
-            args.resume,
-            model,
-            optimizer,
-            scheduler,
-            str(device),
-        )
-
-        start_epoch = int(ckpt.get("epoch", 0)) + 1
-        best_miou = float(ckpt.get("metrics", {}).get("miou", 0.0))
-
-        print(f"[train] Resumed from epoch {start_epoch}, best_miou={best_miou:.4f}")
-
-    # ------------------------------------------------------------------
-    # Adapter
-    # ------------------------------------------------------------------
-
-    adapter = ModelAdapter(
-        model_type=model_type,
-        device=device,
-        use_band_mask=bool(cfg.get("data", {}).get("use_dofa_padding", False)),
-    )
-
-    # ------------------------------------------------------------------
-    # AMP
-    # ------------------------------------------------------------------
-
-    amp_enabled = bool(train_cfg.get("amp", True)) and device.type == "cuda"
-
-    print(f"[train] AMP enabled: {amp_enabled}")
-
-    # ------------------------------------------------------------------
-    # Training loop
-    # ------------------------------------------------------------------
-
-    print(
-        f"\n[train] Start training: "
-        f"{epochs} epochs, {len(train_loader)} steps/epoch\n"
-    )
-
-    for epoch in range(start_epoch, epochs):
-        t0 = time.time()
-
-        train_metrics = train_one_epoch(
-            model=model,
-            loader=train_loader,
-            criterion=criterion,
-            optimizer=optimizer,
-            scheduler=scheduler,
-            adapter=adapter,
-            device=device,
-            epoch=epoch,
-            log_every=int(train_cfg.get("log_every", 20)),
-            grad_clip=float(train_cfg.get("grad_clip", 1.0)),
-            amp_enabled=amp_enabled,
-        )
-
-        val_metrics = validate(
-            model=model,
-            loader=val_loader,
-            criterion=criterion,
-            adapter=adapter,
-            device=device,
-            num_classes=num_classes,
-            ignore_index=ignore_index,
-            amp_enabled=amp_enabled,
-        )
-
-        elapsed = time.time() - t0
-
-        train_log = "  ".join(
-            f"train_{key}={value:.4f}"
-            for key, value in train_metrics.items()
-        )
-
-        val_log = "  ".join(
-            f"val_{key}={value:.4f}"
-            for key, value in val_metrics.items()
-            if key != "per_class"
-        )
-
-        print(
-            f"\nEpoch {epoch:03d}/{epochs - 1:03d} | "
-            f"{train_log} | {val_log} | {elapsed:.0f}s\n"
-        )
-
-        if (epoch + 1) % int(train_cfg.get("print_per_class_every", 5)) == 0:
-            if "per_class" in val_metrics:
-                iou_str = "  ".join(
-                    f"c{i}={value:.3f}"
-                    for i, value in enumerate(val_metrics["per_class"])
-                )
-                print(f"  per-class IoU: {iou_str}")
-
-        # ------------------------------------------------------------------
-        # Checkpoint
-        # ------------------------------------------------------------------
-
-        current_miou = float(val_metrics.get("miou", 0.0))
-        is_best = current_miou > best_miou
-
-        if is_best:
-            best_miou = current_miou
-
-        metrics_to_save = {
-            key: value
-            for key, value in val_metrics.items()
-            if key != "per_class"
-        }
-
-        save_checkpoint(
-            path=str(ckpt_base / "last.pth"),
-            model=model,
-            optimizer=optimizer,
-            scheduler=scheduler,
-            epoch=epoch,
-            metrics=metrics_to_save,
-            cfg=cfg,
-        )
-
-        if is_best:
-            save_checkpoint(
-                path=str(ckpt_base / "best.pth"),
-                model=model,
-                optimizer=optimizer,
-                scheduler=scheduler,
-                epoch=epoch,
-                metrics=metrics_to_save,
-                cfg=cfg,
-            )
-
-            print(f"  ★ New best mIoU: {best_miou:.4f}")
-
-    print(f"\n[train] Training completed. Best mIoU: {best_miou:.4f}")
-
-
-if __name__ == "__main__":
-    main()
+    return train_ds, val_ds
