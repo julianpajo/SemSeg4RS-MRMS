@@ -37,7 +37,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -48,7 +48,7 @@ import torch
 from rasterio.transform import Affine
 
 from configs.sensor_configs import read_sensor
-from preprocessing.preprocess import preprocess_image_for_model
+from datasets.preprocessing.pipeline import preprocess_image_for_model
 from models.crossearth import CrossEarthSeg
 
 
@@ -296,7 +296,7 @@ def predict(args: argparse.Namespace) -> None:
     invalid_mask_raw = make_invalid_mask(x_raw, nodata_value)
 
     # -----------------------------------------------------------------
-    # Sensor configuration + preprocessing
+    # Sensor configuration + datasets
     # -----------------------------------------------------------------
 
     info = read_sensor(
@@ -374,7 +374,7 @@ def predict(args: argparse.Namespace) -> None:
         raise ValueError(f"Invalid output_mode: {args.output_mode}")
 
     # Apply nodata mask only if requested and if invalid pixels exist.
-    # If preprocessing resized the image, for example from 512 to 504,
+    # If datasets resized the image, for example from 512 to 504,
     # the mask is resized with nearest-neighbor interpolation using torch.
     if args.apply_nodata_mask and invalid_mask_raw.any():
         mask = torch.from_numpy(invalid_mask_raw.astype(np.float32)).unsqueeze(0).unsqueeze(0)

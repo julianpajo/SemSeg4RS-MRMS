@@ -17,7 +17,7 @@ def training_config(
     Build default training hyperparameters.
 
     These are safe defaults. Tune batch_size, epochs and learning rates
-    depending on GPU memory and dataset size.
+    depending on GPU memory and datasets size.
 
     Parameters
     ----------
@@ -34,7 +34,7 @@ def training_config(
         YAML-ready training configuration.
     """
     cfg = {
-        "epochs": 30,
+        "epochs": 2,
         "batch_size": 1,
         "num_workers": 0,
         "pin_memory": True,

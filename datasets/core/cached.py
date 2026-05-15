@@ -1,8 +1,8 @@
 """
-preprocessing/processed_dataset.py
+datasets/cached.py
 ----------------------------------
 
-PyTorch dataset for data already preprocessed offline and stored as GeoTIFF files.
+PyTorch datasets for data already preprocessed offline and stored as GeoTIFF files.
 
 Each sample must contain:
 
@@ -10,40 +10,23 @@ Each sample must contain:
     label: data/processed/crossearth/planetscope/train/labels/tile_patch_000000.tif
     sensor: planetscope
     model_name: crossearth
-    source_image: optional
-    source_label: optional
-    row: optional
-    col: optional
-    crop_px: optional
-    wavelengths: optional
 
-Expected image GeoTIFF format
------------------------------
+Image GeoTIFF format
+--------------------
     - multi-band
     - float32
-    - rasterio shape: (C, H, W)
-    - already normalized values, approximately in [0, 1]
+    - shape read by rasterio: (C, H, W)
+    - values already normalized approximately in [0, 1]
 
-Expected label GeoTIFF format
------------------------------
+Label GeoTIFF format
+--------------------
     - single-band
-    - uint8 or integer type
-    - rasterio shape: (H, W)
+    - uint8
+    - shape: (H, W)
     - values:
         0   = sealed_soil
         1   = non_sealed_soil
         255 = ignore_index
-
-This Dataset does NOT perform:
-    - cropping
-    - band selection
-    - normalization
-    - resizing
-    - label remapping
-
-These operations have already been performed offline by:
-
-    scripts/build_processed_dataset.py
 """
 
 from __future__ import annotations
@@ -59,11 +42,19 @@ from torch.utils.data import Dataset
 
 class ProcessedSegDataset(Dataset):
     """
-    Dataset for images and labels already preprocessed offline as GeoTIFF files.
+    Dataset for images and labels already preprocessed offline.
 
-    This dataset only performs:
+    This datasets does not perform:
 
-      - GeoTIFF reading with rasterio;
+      - cropping;
+      - band selection;
+      - normalization;
+      - resizing;
+      - label remapping.
+
+    It only performs:
+
+      - GeoTIFF reading;
       - conversion to torch.Tensor;
       - optional transform application.
     """
@@ -75,7 +66,7 @@ class ProcessedSegDataset(Dataset):
         return_meta: bool = True,
     ):
         """
-        Initialize the processed segmentation dataset.
+        Initialize the processed segmentation datasets.
 
         Parameters
         ----------
@@ -102,12 +93,12 @@ class ProcessedSegDataset(Dataset):
         self.transform = transform
         self.return_meta = return_meta
 
-        for i, sample in enumerate(samples):
+        for idx, sample in enumerate(self.samples):
             if "image" not in sample:
-                raise ValueError(f"Sample {i} does not contain 'image'.")
+                raise ValueError(f"Sample {idx} does not contain 'image'.")
 
             if "label" not in sample:
-                raise ValueError(f"Sample {i} does not contain 'label'.")
+                raise ValueError(f"Sample {idx} does not contain 'label'.")
 
             image_path = Path(sample["image"])
             label_path = Path(sample["label"])
@@ -124,7 +115,7 @@ class ProcessedSegDataset(Dataset):
 
     def __len__(self) -> int:
         """
-        Return the number of samples in the dataset.
+        Return the number of samples in the datasets.
 
         Returns
         -------
@@ -195,7 +186,7 @@ class ProcessedSegDataset(Dataset):
 
     def __getitem__(self, index: int) -> Dict[str, Any]:
         """
-        Return one preprocessed dataset sample.
+        Return one preprocessed datasets sample.
 
         Parameters
         ----------
@@ -227,7 +218,7 @@ class ProcessedSegDataset(Dataset):
                 f"image_path={image_path}, label_path={label_path}"
             )
 
-        out = {
+        out: Dict[str, Any] = {
             "image": torch.from_numpy(image).float(),
             "label": torch.from_numpy(label).long(),
             "sensor": sample.get("sensor", "unknown"),
@@ -254,7 +245,7 @@ class ProcessedSegDataset(Dataset):
 
     def get_sensor_for_index(self, index: int) -> str:
         """
-        Return the sensor associated with a dataset index.
+        Return the sensor associated with a datasets index.
 
         This method is used by SensorBatchSampler to create mono-sensor batches.
 
@@ -272,7 +263,7 @@ class ProcessedSegDataset(Dataset):
 
     def describe(self) -> Dict[str, Any]:
         """
-        Return a compact summary of the processed dataset.
+        Return a compact summary of the processed datasets.
 
         Returns
         -------

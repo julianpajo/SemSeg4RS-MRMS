@@ -1,5 +1,5 @@
 """
-preprocessing/transforms.py
+datasets/augment.py
 ---------------------------
 
 Data augmentation transformations for semantic segmentation.
@@ -218,7 +218,7 @@ class SegmentationEvalTransform:
 
 class NormalizeWithStats:
     """
-    Optional standardization with dataset mean/std.
+    Optional standardization with datasets mean/std.
 
     Use this after normalize() if each band should be transformed as:
 

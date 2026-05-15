@@ -14,7 +14,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Dict, List
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -26,7 +26,7 @@ from rasterio.transform import Affine
 from tqdm import tqdm
 
 from configs.sensor_configs import read_sensor
-from preprocessing.preprocess import preprocess_image_for_model
+from datasets.preprocessing.pipeline import preprocess_image_for_model
 
 
 # ---------------------------------------------------------------------

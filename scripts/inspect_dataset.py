@@ -1,8 +1,8 @@
 """
-scripts/check_dataset.py
+scripts/inspect_dataset.py
 ------------------------
 
-Check that the dataset works correctly before training.
+Check that the datasets works correctly before training.
 
 This script uses the real pipeline:
 
@@ -24,15 +24,15 @@ Examples
 
 Check SPOT train split:
 
-    python scripts/check_dataset.py --samples configs/splits/spot_train_samples.yaml --model-name crossearth --split train --patch-size-px 512 --batch-size 4 --num-workers 0
+    python scripts/inspect_dataset.py --samples configs/splits/spot_train_samples.yaml --model-name crossearth --split train --patch-size-px 512 --batch-size 4 --num-workers 0
 
 Check SPOT validation split:
 
-    python scripts/check_dataset.py --samples configs/splits/spot_val_samples.yaml --model-name crossearth --split val --patch-size-px 512 --stride-px 512 --batch-size 4 --num-workers 0
+    python scripts/inspect_dataset.py --samples configs/splits/spot_val_samples.yaml --model-name crossearth --split val --patch-size-px 512 --stride-px 512 --batch-size 4 --num-workers 0
 
 Check mixed SPOT + PlanetScope split:
 
-    python scripts/check_dataset.py --samples configs/splits/mixed_train_samples.yaml --model-name crossearth --split train --patch-size-px 512 --batch-size 4 --sensor-batch-sampler --num-workers 0
+    python scripts/inspect_dataset.py --samples configs/splits/mixed_train_samples.yaml --model-name crossearth --split train --patch-size-px 512 --batch-size 4 --sensor-batch-sampler --num-workers 0
 """
 
 from __future__ import annotations
@@ -53,16 +53,16 @@ import torch
 import yaml
 from torch.utils.data import DataLoader
 
-from preprocessing.dataset import MultiSensorSegDataset
-from preprocessing.collate import (
+from datasets.core.raw import MultiSensorSegDataset
+from datasets.collate import (
     segmentation_collate,
     SensorBatchSampler,
 )
-from preprocessing.transforms import (
+from datasets.transforms.augment import (
     SegmentationEvalTransform,
     SegmentationTrainTransform,
 )
-from preprocessing.preprocess import IGNORE_INDEX
+from datasets.preprocessing.pipeline import IGNORE_INDEX
 
 
 # ---------------------------------------------------------------------
@@ -278,7 +278,7 @@ def main() -> None:
         "--model-name",
         type=str,
         default="crossearth",
-        help="Model name used by preprocess.py.",
+        help="Model name used by pipeline.py.",
     )
 
     parser.add_argument(
@@ -498,7 +498,7 @@ def main() -> None:
     print("\nChecking batches...\n")
 
     for batch_idx, batch in enumerate(loader):
-        if args.max_batches > 0 and batch_idx >= args.max_batches:
+        if 0 < args.max_batches <= batch_idx:
             break
 
         try:

@@ -1,8 +1,8 @@
 """
-data/preprocess.py
+data/pipeline.py
 ------------------
 
-Model-aware preprocessing transformations for multi-sensor remote-sensing
+Model-aware datasets transformations for multi-sensor remote-sensing
 semantic segmentation.
 
 Preprocessing depends on the target model:
@@ -11,7 +11,7 @@ Preprocessing depends on the target model:
   "rgbnir"    -> select R, G, B, NIR           [segformer_sae 4-band, DeepLabV3+]
   "rgb"       -> select R, G, B                [crossearth / DINO-like RGB]
 
-Original dataset labels:
+Original datasets labels:
 
   0 = invalid_pixel
   1 = sealed_soil

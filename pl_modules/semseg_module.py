@@ -10,7 +10,7 @@ import torch
 from models.factory import build_model, build_optimizer_for_model, get_model_type, get_num_classes
 from models.losses import build_loss
 from models.utils import build_scheduler, SegMetrics
-from preprocessing.collate import ModelAdapter
+from datasets.collate import ModelAdapter
 
 
 class SemSegLightningModule(pl.LightningModule):

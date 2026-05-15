@@ -12,12 +12,12 @@ Supported models:
 
 Dataset
 -------
-This script uses preprocessing/dataset.py, therefore preprocessing is model-aware:
+This script uses datasets/raw.py, therefore datasets is model-aware:
 
     model_name="segformer_sae"  -> RGBNIR, 512x512
     model_name="deeplabv3plus"  -> RGBNIR, 512x512
     model_name="dofa"           -> all_bands, 224x224
-    model_name="crossearth"     -> RGBNIR, 504x504 if configured in preprocess.py
+    model_name="crossearth"     -> RGBNIR, 504x504 if configured in pipeline.py
 
 Training labels
 ---------------
@@ -53,13 +53,13 @@ import torch
 import torch.nn as nn
 import yaml
 
-from preprocessing.dataset import MultiSensorSegDataset
-from preprocessing.collate import (
+from datasets.core.raw import MultiSensorSegDataset
+from datasets.collate import (
     SensorBatchSampler,
     segmentation_collate,
     dofa_pad_collate,
 )
-from preprocessing.transforms import (
+from datasets.transforms.augment import (
     SegmentationTrainTransform,
     SegmentationEvalTransform,
 )
@@ -487,111 +487,6 @@ def build_optimizer_for_model(
     raise ValueError(f"Unsupported optimizer: {opt_name}")
 
 
-def build_datasets(cfg: Dict[str, Any]):
-    """
-    Build train and validation datasets.
-
-    Supported modes
-    ---------------
-    1. data.preprocessed: false
-
-       Uses MultiSensorSegDataset and reads raw GeoTIFF files.
-       Preprocessing is performed online.
-
-    2. data.preprocessed: true
-
-       Uses ProcessedSegDataset and reads already preprocessed GeoTIFF files.
-       Preprocessing is NOT repeated.
-
-    Parameters
-    ----------
-    cfg :
-        Training configuration dictionary.
-
-    Returns
-    -------
-    tuple
-        train_ds, val_ds.
-    """
-    data_cfg = cfg["data"]
-    model_type = get_model_type(cfg)
-
-    train_samples = load_samples(data_cfg["train_samples"])
-    val_samples = load_samples(data_cfg["val_samples"])
-
-    use_preprocessed = bool(data_cfg.get("preprocessed", False))
-
-    print(f"[train] Data mode: {'offline/preprocessed' if use_preprocessed else 'online/raw'}")
-
-    # ------------------------------------------------------------------
-    # Offline / preprocessed mode
-    # ------------------------------------------------------------------
-    if use_preprocessed:
-        from preprocessing.processed_dataset import ProcessedSegDataset
-
-        train_ds = ProcessedSegDataset(
-            samples=train_samples,
-            transform=build_transforms(cfg, split="train"),
-            return_meta=bool(data_cfg.get("return_meta", True)),
-        )
-
-        val_ds = ProcessedSegDataset(
-            samples=val_samples,
-            transform=build_transforms(cfg, split="val"),
-            return_meta=bool(data_cfg.get("return_meta", True)),
-        )
-
-        return train_ds, val_ds
-
-    # ------------------------------------------------------------------
-    # Online / raw GeoTIFF mode
-    # ------------------------------------------------------------------
-
-    model_name = data_cfg.get("model_name", model_type)
-
-    patch_size_px = data_cfg.get("patch_size_px", None)
-    patch_size_m = data_cfg.get("patch_size_m", None)
-
-    if patch_size_px is None and patch_size_m is None:
-        patch_size_px = 512
-
-    train_ds = MultiSensorSegDataset(
-        samples=train_samples,
-        model_name=model_name,
-        split="train",
-        patch_size_px=patch_size_px,
-        patch_size_m=patch_size_m,
-        stride_px=None,
-        max_invalid_frac=float(data_cfg.get("max_invalid_frac", 0.9)),
-        min_valid_frac=float(data_cfg.get("min_valid_frac", 0.1)),
-        min_valid_classes=int(data_cfg.get("min_valid_classes", 1)),
-        max_retries=int(data_cfg.get("max_retries", 20)),
-        remap_labels=bool(data_cfg.get("remap_labels", True)),
-        ignore_index=int(cfg.get("loss", {}).get("ignore_index", 255)),
-        transform=build_transforms(cfg, split="train"),
-        return_meta=bool(data_cfg.get("return_meta", True)),
-    )
-
-    val_ds = MultiSensorSegDataset(
-        samples=val_samples,
-        model_name=model_name,
-        split="val",
-        patch_size_px=patch_size_px,
-        patch_size_m=patch_size_m,
-        stride_px=data_cfg.get("stride_px", patch_size_px),
-        max_invalid_frac=float(data_cfg.get("max_invalid_frac", 0.9)),
-        min_valid_frac=float(data_cfg.get("min_valid_frac", 0.1)),
-        min_valid_classes=int(data_cfg.get("min_valid_classes", 1)),
-        max_retries=1,
-        remap_labels=bool(data_cfg.get("remap_labels", True)),
-        ignore_index=int(cfg.get("loss", {}).get("ignore_index", 255)),
-        transform=build_transforms(cfg, split="val"),
-        return_meta=bool(data_cfg.get("return_meta", True)),
-    )
-
-    return train_ds, val_ds
-
-
 def build_loaders(cfg: Dict[str, Any], train_ds, val_ds):
     """
     Build DataLoaders.
@@ -609,9 +504,9 @@ def build_loaders(cfg: Dict[str, Any], train_ds, val_ds):
     cfg :
         Training configuration dictionary.
     train_ds :
-        Training dataset.
+        Training datasets.
     val_ds :
-        Validation dataset.
+        Validation datasets.
 
     Returns
     -------
@@ -774,7 +669,7 @@ def build_datasets(cfg: Dict[str, Any]):
     # Offline / preprocessed mode
     # ------------------------------------------------------------------
     if use_preprocessed:
-        from preprocessing.processed_dataset import ProcessedSegDataset
+        from datasets.core.cached import ProcessedSegDataset
 
         train_ds = ProcessedSegDataset(
             samples=train_samples,

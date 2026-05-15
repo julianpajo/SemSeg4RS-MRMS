@@ -1,8 +1,8 @@
 """
-preprocessing/dataset.py
+datasets/raw.py
 ------------------------
 
-PyTorch dataset for multi-sensor remote-sensing semantic segmentation.
+PyTorch datasets for multi-sensor remote-sensing semantic segmentation.
 
 Responsibilities of this file:
   - read GeoTIFF images;
@@ -31,7 +31,7 @@ Expected sample format
         "sensor_config": "configs/sensors/spot.yaml",  # optional but recommended
     }
 
-If "sensor_config" is not provided, the dataset tries:
+If "sensor_config" is not provided, the datasets tries:
 
     configs/sensors/{sensor}.yaml
     configs/metadata/{sensor}.yaml
@@ -39,127 +39,28 @@ If "sensor_config" is not provided, the dataset tries:
 
 from __future__ import annotations
 
-import random
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-import rasterio
 import torch
-from rasterio.windows import Window
 from torch.utils.data import Dataset
 
 from configs.sensor_configs import read_sensor
-from .preprocess import (
+from datasets.preprocessing.pipeline import (
     IGNORE_INDEX,
-    is_valid_patch,
     preprocess_image_for_model,
     preprocess_label_for_model,
 )
 
-
-# ---------------------------------------------------------------------------
-# Raster utilities
-# ---------------------------------------------------------------------------
-
-def raster_size(path: str) -> Tuple[int, int]:
-    """
-    Return the spatial size of a raster.
-
-    Parameters
-    ----------
-    path :
-        Path to the raster file.
-
-    Returns
-    -------
-    tuple of int
-        Raster size as:
-
-        height, width
-    """
-    with rasterio.open(path) as src:
-        return src.height, src.width
-
-
-def read_image_window(
-    path: str,
-    row: int,
-    col: int,
-    size: int,
-) -> np.ndarray:
-    """
-    Read a square window from a multi-band raster.
-
-    Parameters
-    ----------
-    path :
-        Path to the image raster.
-    row :
-        Top-left row offset of the crop.
-    col :
-        Top-left column offset of the crop.
-    size :
-        Crop size in pixels.
-
-    Returns
-    -------
-    np.ndarray
-        Image array with shape (C, H, W).
-    """
-    with rasterio.open(path) as src:
-        window = Window(
-            col_off=col,
-            row_off=row,
-            width=size,
-            height=size,
-        )
-
-        window = window.intersection(
-            Window(0, 0, src.width, src.height)
-        )
-
-        return src.read(window=window)
-
-
-def read_label_window(
-    path: str,
-    row: int,
-    col: int,
-    size: int,
-) -> np.ndarray:
-    """
-    Read a square window from a single-band label raster.
-
-    Parameters
-    ----------
-    path :
-        Path to the label raster.
-    row :
-        Top-left row offset of the crop.
-    col :
-        Top-left column offset of the crop.
-    size :
-        Crop size in pixels.
-
-    Returns
-    -------
-    np.ndarray
-        Label array with shape (H, W), stored as int64.
-    """
-    with rasterio.open(path) as src:
-        window = Window(
-            col_off=col,
-            row_off=row,
-            width=size,
-            height=size,
-        )
-
-        window = window.intersection(
-            Window(0, 0, src.width, src.height)
-        )
-
-        return src.read(1, window=window).astype(np.int64)
+from datasets.sampling.patches import (
+    raster_size,
+    read_image_window,
+    read_label_window,
+    compute_crop_size_px,
+    make_grid_items,
+    sample_random_valid_window,
+)
 
 
 def infer_sensor_config_path(sample: Dict[str, Any]) -> str:
@@ -212,73 +113,6 @@ def infer_sensor_config_path(sample: Dict[str, Any]) -> str:
         f"Sensor configuration not found for sensor='{sensor}'. "
         f"Searched paths: {[str(p) for p in candidates]}"
     )
-
-
-def compute_crop_size_px(
-    image_path: str,
-    sensor_info: Any,
-    patch_size_px: Optional[int],
-    patch_size_m: Optional[float],
-) -> int:
-    """
-    Determine the crop size in pixels.
-
-    Priority
-    --------
-    1. patch_size_px
-    2. patch_size_m / sensor_info.gsd_m
-    3. min(height, width), used as fallback
-
-    Parameters
-    ----------
-    image_path :
-        Path to the image raster.
-    sensor_info :
-        SensorConfig-like object containing at least gsd_m when patch_size_m is used.
-    patch_size_px :
-        Crop size in pixels. Takes priority if provided.
-    patch_size_m :
-        Crop size in meters. Used only if patch_size_px is None.
-
-    Returns
-    -------
-    int
-        Crop size in pixels.
-
-    Raises
-    ------
-    ValueError
-        If the provided crop size or GSD is invalid.
-    """
-    if patch_size_px is not None:
-        if patch_size_px <= 0:
-            raise ValueError(
-                f"patch_size_px must be > 0, received {patch_size_px}"
-            )
-        return int(patch_size_px)
-
-    if patch_size_m is not None:
-        gsd_m = getattr(sensor_info, "gsd_m", None)
-
-        if gsd_m is None:
-            raise ValueError(
-                "patch_size_m was provided, but SensorConfig does not contain gsd_m."
-            )
-
-        if float(gsd_m) <= 0:
-            raise ValueError(f"Invalid gsd_m: {gsd_m}")
-
-        crop_px = int(round(float(patch_size_m) / float(gsd_m)))
-
-        if crop_px <= 0:
-            raise ValueError(
-                f"Invalid crop_px: patch_size_m={patch_size_m}, gsd_m={gsd_m}"
-            )
-
-        return crop_px
-
-    h, w = raster_size(image_path)
-    return int(min(h, w))
 
 
 def validate_sample(sample: Dict[str, Any], idx: int) -> None:
@@ -349,7 +183,7 @@ class MultiSensorSegDataset(Dataset):
             sensor or sensor_config
 
     model_name :
-        Model name handled by preprocess.py.
+        Model name handled by pipeline.py.
 
         Examples:
 
@@ -397,7 +231,7 @@ class MultiSensorSegDataset(Dataset):
         Ignore index used for invalid pixels/classes during training.
 
     transform :
-        Optional transform applied after preprocessing.
+        Optional transform applied after datasets.
 
     return_meta :
         If True, return metadata such as file paths, crop coordinates and raw shapes.
@@ -421,7 +255,7 @@ class MultiSensorSegDataset(Dataset):
         return_meta: bool = True,
     ):
         """
-        Initialize the multi-sensor segmentation dataset.
+        Initialize the multi-sensor segmentation datasets.
 
         The constructor validates samples, stores configuration parameters and
         precomputes the validation/test crop grid when required.
@@ -527,7 +361,7 @@ class MultiSensorSegDataset(Dataset):
 
     def describe(self) -> Dict[str, Any]:
         """
-        Return a compact summary of the dataset configuration and content.
+        Return a compact summary of the datasets configuration and content.
 
         Returns
         -------
@@ -552,7 +386,7 @@ class MultiSensorSegDataset(Dataset):
 
     def get_sensors(self) -> List[str]:
         """
-        Return the sorted list of sensors present in the dataset.
+        Return the sorted list of sensors present in the datasets.
 
         Returns
         -------
@@ -641,23 +475,6 @@ class MultiSensorSegDataset(Dataset):
         return int(min(crop_px, h, w))
 
     def _build_grid_items(self) -> List[Dict[str, int]]:
-        """
-        Create the list of regular grid crops for validation/test.
-
-        Returns
-        -------
-        list of dict
-            Each item contains:
-
-            sample_idx :
-                Original sample index.
-            row :
-                Crop top-left row.
-            col :
-                Crop top-left column.
-            crop_px :
-                Crop size in pixels.
-        """
         items: List[Dict[str, int]] = []
 
         for sample_idx, sample in enumerate(self.samples):
@@ -666,99 +483,33 @@ class MultiSensorSegDataset(Dataset):
 
             stride = self.stride_px if self.stride_px is not None else crop_px
 
-            if stride <= 0:
-                raise ValueError(f"stride_px must be > 0, received {stride}")
-
-            max_row = max(0, h - crop_px)
-            max_col = max(0, w - crop_px)
-
-            rows = list(range(0, max_row + 1, stride))
-            cols = list(range(0, max_col + 1, stride))
-
-            if not rows:
-                rows = [0]
-
-            if not cols:
-                cols = [0]
-
-            if rows[-1] != max_row:
-                rows.append(max_row)
-
-            if cols[-1] != max_col:
-                cols.append(max_col)
-
-            for row in rows:
-                for col in cols:
-                    items.append(
-                        {
-                            "sample_idx": int(sample_idx),
-                            "row": int(row),
-                            "col": int(col),
-                            "crop_px": int(crop_px),
-                        }
-                    )
+            items.extend(
+                make_grid_items(
+                    h=h,
+                    w=w,
+                    crop_px=crop_px,
+                    stride_px=int(stride),
+                    sample_idx=sample_idx,
+                )
+            )
 
         return items
 
     def _sample_random_window(self, sample_idx: int) -> Dict[str, int]:
-        """
-        Select a random valid crop for training.
-
-        The method tries up to max_retries random windows and returns the first
-        valid one according to is_valid_patch(). If no valid patch is found, it
-        returns the last sampled window.
-
-        Parameters
-        ----------
-        sample_idx :
-            Original sample index.
-
-        Returns
-        -------
-        dict
-            Crop item containing sample_idx, row, col and crop_px.
-        """
         sample = self.samples[sample_idx]
-        h, w = raster_size(sample["image"])
         crop_px = self._get_crop_size_px(sample_idx)
+        info = self._get_sensor_info(sample_idx)
 
-        last_item = {
-            "sample_idx": int(sample_idx),
-            "row": 0,
-            "col": 0,
-            "crop_px": int(crop_px),
-        }
-
-        for _ in range(self.max_retries):
-            row = random.randint(0, max(0, h - crop_px))
-            col = random.randint(0, max(0, w - crop_px))
-
-            label_raw = read_label_window(
-                path=sample["label"],
-                row=row,
-                col=col,
-                size=crop_px,
-            )
-
-            last_item = {
-                "sample_idx": int(sample_idx),
-                "row": int(row),
-                "col": int(col),
-                "crop_px": int(crop_px),
-            }
-
-            info = self._get_sensor_info(sample_idx)
-
-            if is_valid_patch(
-                label=label_raw,
-                info=info,
-                max_invalid_frac=self.max_invalid_frac,
-                min_valid_frac=self.min_valid_frac,
-                min_valid_classes=self.min_valid_classes,
-            ):
-                return last_item
-
-        return last_item
+        return sample_random_valid_window(
+            sample=sample,
+            info=info,
+            crop_px=crop_px,
+            max_retries=self.max_retries,
+            max_invalid_frac=self.max_invalid_frac,
+            min_valid_frac=self.min_valid_frac,
+            min_valid_classes=self.min_valid_classes,
+            sample_idx=sample_idx,
+        )
 
     def _load_raw_pair(self, item: Dict[str, int]) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -804,7 +555,7 @@ class MultiSensorSegDataset(Dataset):
         item: Dict[str, int],
     ) -> Dict[str, Any]:
         """
-        Apply preprocessing and build the final dataset sample.
+        Apply datasets and build the final datasets sample.
 
         Parameters
         ----------
@@ -874,7 +625,7 @@ class MultiSensorSegDataset(Dataset):
 
     def __len__(self) -> int:
         """
-        Return the number of items in the dataset.
+        Return the number of items in the datasets.
 
         For training, this corresponds to the number of original samples.
         For validation/test, this corresponds to the number of grid crops.
@@ -891,7 +642,7 @@ class MultiSensorSegDataset(Dataset):
 
     def __getitem__(self, index: int) -> Dict[str, Any]:
         """
-        Return one preprocessed dataset sample.
+        Return one preprocessed datasets sample.
 
         For training, a random crop is sampled from the selected image.
         For validation/test, a deterministic grid crop is used.

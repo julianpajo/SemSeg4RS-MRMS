@@ -1,5 +1,5 @@
 """
-scripts/generate_training_configs.py
+scripts/generate_configs.py
 ------------------------------------
 
 Automatically generate training YAML configs for:
@@ -21,42 +21,42 @@ Automatically generate training YAML configs for:
 
 Output
 ------
-    configs/training/{model}/{dataset}/online.yaml
-    configs/training/{model}/{dataset}/offline.yaml
+    configs/training/{model}/{datasets}/online.yaml
+    configs/training/{model}/{datasets}/offline.yaml
 
 Usage
 -----
-    python scripts/generate_training_configs.py
+    python scripts/generate_configs.py
 
 Overwrite existing files:
 
-    python scripts/generate_training_configs.py --overwrite
+    python scripts/generate_configs.py --overwrite
 
 Generate only one model:
 
-    python scripts/generate_training_configs.py --models crossearth --overwrite
+    python scripts/generate_configs.py --models crossearth --overwrite
 
-Generate only one dataset/setup:
+Generate only one datasets/setup:
 
-    python scripts/generate_training_configs.py --datasets mixed --overwrite
+    python scripts/generate_configs.py --datasets mixed --overwrite
 
 Notes
 -----
 online.yaml:
     - uses raw split YAML files:
-        configs/splits/raw/{dataset}/train_samples.yaml
-        configs/splits/raw/{dataset}/val_samples.yaml
+        configs/splits/raw/{datasets}/train_samples.yaml
+        configs/splits/raw/{datasets}/val_samples.yaml
 
-    - preprocessing is performed online by MultiSensorSegDataset.
+    - datasets is performed online by MultiSensorSegDataset.
 
 offline.yaml:
     - uses processed split YAML files:
-        configs/splits/processed/{model}/{dataset}/train_samples.yaml
-        configs/splits/processed/{model}/{dataset}/val_samples.yaml
+        configs/splits/processed/{model}/{datasets}/train_samples.yaml
+        configs/splits/processed/{model}/{datasets}/val_samples.yaml
 
-    - includes a `preprocessing` section used by:
+    - includes a `datasets` section used by:
 
-        scripts/build_processed_dataset.py --config ... --split train|val|test
+        scripts/build_cache.py --config ... --split train|val|test
 
     - training uses ProcessedSegDataset.
 """
@@ -241,7 +241,7 @@ def offline_data_config(model_name: str, dataset_name: str) -> Dict[str, Any]:
 
       - training reads preprocessed GeoTIFF files;
       - crop, band selection, normalization, resize and label remapping have
-        already been performed by build_processed_dataset.py.
+        already been performed by build_cache.py.
 
     Parameters
     ----------
@@ -458,12 +458,12 @@ def build_patches_per_sensor(
 
 
 # ---------------------------------------------------------------------
-# Offline preprocessing configs
+# Offline datasets configs
 # ---------------------------------------------------------------------
 
 def preprocessing_config(model_name: str, dataset_name: str) -> Dict[str, Any]:
     """
-    Build the preprocessing section used by scripts/build_processed_dataset.py.
+    Build the datasets section used by scripts/build_cache.py.
 
     This section is used only by offline configs.
 
@@ -488,7 +488,7 @@ def preprocessing_config(model_name: str, dataset_name: str) -> Dict[str, Any]:
     Returns
     -------
     dict
-        YAML-ready preprocessing configuration.
+        YAML-ready datasets configuration.
     """
     patch_size_px = 512
     max_patches_per_image = 20
@@ -534,7 +534,7 @@ def preprocessing_config(model_name: str, dataset_name: str) -> Dict[str, Any]:
         "stride_px": patch_size_px,
 
         # Used only for train random patch extraction.
-        # If dataset is mixed, build_processed_dataset.py will use
+        # If datasets is mixed, build_cache.py will use
         # patches_per_image_by_sensor.
         "patches_per_image": patches_per_image,
         "patches_per_image_by_sensor": patches_by_sensor,
@@ -597,10 +597,10 @@ def build_config(
         "training": training_config(model_name, dataset_name, mode),
     }
 
-    # Only offline configs need the preprocessing section.
-    # Online configs perform preprocessing directly inside MultiSensorSegDataset.
+    # Only offline configs need the datasets section.
+    # Online configs perform datasets directly inside MultiSensorSegDataset.
     if mode == "offline":
-        cfg["preprocessing"] = preprocessing_config(
+        cfg["datasets"] = preprocessing_config(
             model_name=model_name,
             dataset_name=dataset_name,
         )
@@ -668,7 +668,7 @@ def generate_configs(
     models :
         List of model names to generate.
     datasets :
-        List of dataset/setup names to generate.
+        List of datasets/setup names to generate.
     """
     written = 0
     skipped = 0
@@ -762,7 +762,7 @@ def main() -> None:
     """
     CLI entry point.
 
-    Generate YAML configs for the selected model/dataset combinations.
+    Generate YAML configs for the selected model/datasets combinations.
     """
     args = parse_args()
 
