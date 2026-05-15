@@ -371,13 +371,13 @@ configs/training/{model_name}/{sensor_setup}/online.yaml
 ### Example: CrossEarth PlanetScope Online Fine-Tuning
 
 ```powershell
-python train/train.py --config configs/training/crossearth/planetscope/online.yaml --device cuda:0 --train-mode finetune
+python pl_modules\run_train.py --config configs/training/crossearth/planetscope/online.yaml --device 0 --train-mode finetune
 ```
 
 ### Example: CrossEarth PlanetScope Online Training from Scratch
 
 ```powershell
-python train/train.py --config configs/training/crossearth/planetscope/online.yaml --device cuda:0 --train-mode scratch
+python pl_modules\run_train.py --config configs/training/crossearth/planetscope/online.yaml --device 0 --train-mode scratch
 ```
 
 
@@ -456,13 +456,13 @@ configs/training/{model_name}/{sensor_setup}/offline.yaml
 ### Example: CrossEarth PlanetScope Offline Fine-Tuning
 
 ```powershell
-python train/train.py --config configs/training/crossearth/planetscope/offline.yaml --device cuda:0 --train-mode finetune
+python pl_modules\run_train.py --config configs\training\dofa\planetscope\offline.yaml --device 0 --train-mode finetune
 ```
 
 ### Example: PlanetScope Offline Training from Scratch
 
 ```powershell
-python train/train.py --config configs/training/crossearth/planetscope/offline.yaml --device cuda:0 --train-mode scratch
+python pl_modules\run_train.py --config configs\training\dofa\planetscope\offline.yaml --device 0 --train-mode scratch
 ```
 
 ---
