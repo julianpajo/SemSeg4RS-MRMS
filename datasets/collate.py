@@ -1,5 +1,5 @@
 """
-preprocessing/collate.py
+datasets/collate.py
 ------------------------
 
 Collate functions and adapters for multi-sensor semantic segmentation.
@@ -14,7 +14,7 @@ Responsibilities of this file:
 This file does not perform:
   - raster reading;
   - cropping;
-  - image/label preprocessing.
+  - image/label datasets.
 """
 
 from __future__ import annotations
@@ -70,7 +70,7 @@ def _collect_non_tensor_fields(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
     Parameters
     ----------
     batch :
-        List of dataset samples.
+        List of datasets samples.
 
     Returns
     -------
@@ -112,7 +112,7 @@ def segmentation_collate(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
     Parameters
     ----------
     batch :
-        List of dataset samples.
+        List of datasets samples.
 
     Returns
     -------
@@ -163,7 +163,7 @@ def dofa_pad_collate(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
     Parameters
     ----------
     batch :
-        List of dataset samples.
+        List of datasets samples.
 
     Returns
     -------
@@ -242,10 +242,10 @@ class SensorBatchSampler(Sampler[List[int]]):
     """
     Batch sampler that builds mono-sensor batches.
 
-    This sampler no longer accesses dataset._grid_items or any other internal
+    This sampler no longer accesses datasets._grid_items or any other internal
     Dataset detail. It only uses:
 
-        dataset.get_sensor_for_index(index)
+        datasets.get_sensor_for_index(index)
 
     This keeps collate.py independent from the internal Dataset structure.
     """
@@ -277,7 +277,7 @@ class SensorBatchSampler(Sampler[List[int]]):
         ValueError
             If batch_size is not strictly positive.
         TypeError
-            If the dataset does not implement get_sensor_for_index(index).
+            If the datasets does not implement get_sensor_for_index(index).
         """
         if batch_size <= 0:
             raise ValueError(
@@ -286,7 +286,7 @@ class SensorBatchSampler(Sampler[List[int]]):
 
         if not hasattr(dataset, "get_sensor_for_index"):
             raise TypeError(
-                "The dataset must implement get_sensor_for_index(index)."
+                "The datasets must implement get_sensor_for_index(index)."
             )
 
         self.dataset = dataset
@@ -298,12 +298,12 @@ class SensorBatchSampler(Sampler[List[int]]):
 
     def _build_groups(self) -> Dict[str, List[int]]:
         """
-        Group dataset indices by sensor name.
+        Group datasets indices by sensor name.
 
         Returns
         -------
         dict
-            Dictionary mapping each sensor name to the list of dataset indices
+            Dictionary mapping each sensor name to the list of datasets indices
             associated with that sensor.
         """
         groups: Dict[str, List[int]] = {}

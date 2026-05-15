@@ -129,7 +129,7 @@ class SensorConfig:
     raster_gsd_m :
         GSD estimated from the raster transform. Used only as a diagnostic check.
     label_mapping :
-        Mapping between raw label values and semantic dataset classes.
+        Mapping between raw label values and semantic datasets classes.
     """
 
     source_path: str
@@ -489,7 +489,7 @@ def validate_sensor_config(raw: Dict[str, Any], *, n_bands: Optional[int] = None
 
 def _validate_label_mapping(value: Any) -> Dict[str, int]:
     """
-    Validate the raw label mapping of the sensor/dataset.
+    Validate the raw label mapping of the sensor/datasets.
 
     Required format
     ---------------
@@ -563,7 +563,7 @@ def _gsd_from_transform(src) -> Optional[float]:
     Parameters
     ----------
     src :
-        Open rasterio dataset.
+        Open rasterio datasets.
 
     Returns
     -------

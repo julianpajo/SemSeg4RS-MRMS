@@ -1,28 +1,28 @@
 """
-scripts/build_processed_dataset.py
+scripts/build_cache.py
 ----------------------------------
 
-Build an offline preprocessed GeoTIFF dataset from raw GeoTIFF splits.
+Build an offline preprocessed GeoTIFF datasets from raw GeoTIFF splits.
 
 Recommended usage
 -----------------
 Use the offline training YAML as the single source of truth:
 
-    python scripts/build_processed_dataset.py \
+    python scripts/build_cache.py \
         --config configs/training/crossearth/planetscope/offline.yaml \
         --split train
 
-    python scripts/build_processed_dataset.py \
+    python scripts/build_cache.py \
         --config configs/training/crossearth/planetscope/offline.yaml \
         --split val
 
-    python scripts/build_processed_dataset.py \
+    python scripts/build_cache.py \
         --config configs/training/crossearth/planetscope/offline.yaml \
         --split test
 
-The script reads the `preprocessing` section from the YAML:
+The script reads the `datasets` section from the YAML:
 
-    preprocessing:
+    datasets:
       raw_train_samples: configs/splits/raw/planetscope/train_samples.yaml
       raw_val_samples: configs/splits/raw/planetscope/val_samples.yaml
       raw_test_samples: configs/splits/raw/planetscope/test_samples.yaml
@@ -49,7 +49,7 @@ Legacy usage
 ------------
 The old explicit CLI arguments are still supported:
 
-    python scripts/build_processed_dataset.py \
+    python scripts/build_cache.py \
         --samples configs/splits/raw/planetscope/train_samples.yaml \
         --model-name crossearth \
         --split train \
@@ -83,7 +83,7 @@ import argparse
 import random
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, Tuple
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -95,17 +95,20 @@ from rasterio.transform import Affine
 from tqdm import tqdm
 
 from configs.sensor_configs import read_sensor
-from preprocessing.dataset import (
+from datasets.core.raw import infer_sensor_config_path
+
+from datasets.preprocessing.pipeline import (
+    IGNORE_INDEX,
+    preprocess_image_for_model,
+    preprocess_label_for_model,
+)
+
+from datasets.sampling.patches import (
     raster_size,
     read_image_window,
     read_label_window,
-    infer_sensor_config_path,
-)
-from preprocessing.preprocess import (
-    IGNORE_INDEX,
-    is_valid_patch,
-    preprocess_image_for_model,
-    preprocess_label_for_model,
+    make_grid_items,
+    sample_random_valid_windows,
 )
 
 
@@ -201,12 +204,12 @@ def resolve_from_training_config(
     split: str,
 ) -> Dict[str, Any]:
     """
-    Resolve preprocessing arguments from a training YAML config.
+    Resolve datasets arguments from a training YAML config.
 
     Required YAML sections:
 
         model.type
-        preprocessing.*
+        datasets.*
 
     The output dictionary has the same fields used by the legacy CLI mode.
 
@@ -220,7 +223,7 @@ def resolve_from_training_config(
     Returns
     -------
     dict
-        Resolved preprocessing arguments.
+        Resolved datasets arguments.
     """
     cfg = load_yaml(config_path)
 
@@ -234,10 +237,10 @@ def resolve_from_training_config(
             "`data.model_name` or `model.type`."
         )
 
-    pp = cfg.get("preprocessing", None)
+    pp = cfg.get("datasets", None)
     if pp is None:
         raise ValueError(
-            f"Missing `preprocessing` section in config: {config_path}"
+            f"Missing `datasets` section in config: {config_path}"
         )
 
     if split not in {"train", "val", "test"}:
@@ -248,12 +251,12 @@ def resolve_from_training_config(
 
     if raw_key not in pp:
         raise ValueError(
-            f"Missing preprocessing.{raw_key} in config: {config_path}"
+            f"Missing datasets.{raw_key} in config: {config_path}"
         )
 
     if processed_key not in pp:
         raise ValueError(
-            f"Missing preprocessing.{processed_key} in config: {config_path}"
+            f"Missing datasets.{processed_key} in config: {config_path}"
         )
 
     resolved = {
@@ -284,7 +287,7 @@ def resolve_from_training_config(
 
 def resolve_from_cli(args) -> Dict[str, Any]:
     """
-    Resolve preprocessing arguments from explicit CLI arguments.
+    Resolve datasets arguments from explicit CLI arguments.
 
     Parameters
     ----------
@@ -294,7 +297,7 @@ def resolve_from_cli(args) -> Dict[str, Any]:
     Returns
     -------
     dict
-        Resolved preprocessing arguments.
+        Resolved datasets arguments.
 
     Raises
     ------
@@ -509,153 +512,6 @@ def save_label_geotiff(
 
 
 # ---------------------------------------------------------------------
-# Patch sampling
-# ---------------------------------------------------------------------
-
-def make_grid_items(
-    h: int,
-    w: int,
-    crop_px: int,
-    stride_px: int,
-) -> List[Dict[str, int]]:
-    """
-    Build regular grid crop items for validation/test.
-
-    Parameters
-    ----------
-    h :
-        Raster height.
-    w :
-        Raster width.
-    crop_px :
-        Crop size in pixels.
-    stride_px :
-        Grid stride in pixels.
-
-    Returns
-    -------
-    list of dict
-        Crop items containing row, col and crop_px.
-    """
-    max_row = max(0, h - crop_px)
-    max_col = max(0, w - crop_px)
-
-    rows = list(range(0, max_row + 1, stride_px))
-    cols = list(range(0, max_col + 1, stride_px))
-
-    if not rows:
-        rows = [0]
-
-    if not cols:
-        cols = [0]
-
-    if rows[-1] != max_row:
-        rows.append(max_row)
-
-    if cols[-1] != max_col:
-        cols.append(max_col)
-
-    items = []
-
-    for row in rows:
-        for col in cols:
-            items.append(
-                {
-                    "row": int(row),
-                    "col": int(col),
-                    "crop_px": int(crop_px),
-                }
-            )
-
-    return items
-
-
-def make_random_items(
-    sample: Dict[str, Any],
-    info,
-    crop_px: int,
-    patches_per_image: int,
-    max_retries: int,
-    max_invalid_frac: float,
-    min_valid_frac: float,
-    min_valid_classes: int,
-    rng: random.Random,
-) -> List[Dict[str, int]]:
-    """
-    Sample valid random patches from one raw image.
-
-    A patch is valid if is_valid_patch(...) accepts the raw label crop.
-
-    Parameters
-    ----------
-    sample :
-        Raw sample dictionary containing image and label paths.
-    info :
-        Sensor configuration associated with the sample.
-    crop_px :
-        Crop size in pixels.
-    patches_per_image :
-        Number of valid patches to extract from the image.
-    max_retries :
-        Maximum number of attempts per requested patch.
-    max_invalid_frac :
-        Maximum allowed invalid-pixel fraction.
-    min_valid_frac :
-        Minimum required valid-pixel fraction.
-    min_valid_classes :
-        Minimum number of valid semantic classes in a patch.
-    rng :
-        Random number generator used for deterministic sampling.
-
-    Returns
-    -------
-    list of dict
-        Valid random crop items.
-    """
-    h, w = raster_size(sample["image"])
-    crop_px = min(crop_px, h, w)
-
-    items = []
-
-    attempts_total = patches_per_image * max_retries
-    attempts = 0
-
-    while len(items) < patches_per_image and attempts < attempts_total:
-        attempts += 1
-
-        row = rng.randint(0, max(0, h - crop_px))
-        col = rng.randint(0, max(0, w - crop_px))
-
-        label_raw = read_label_window(
-            path=sample["label"],
-            row=row,
-            col=col,
-            size=crop_px,
-        )
-
-        ok = is_valid_patch(
-            label=label_raw,
-            info=info,
-            max_invalid_frac=max_invalid_frac,
-            min_valid_frac=min_valid_frac,
-            min_valid_classes=min_valid_classes,
-        )
-
-        if not ok:
-            continue
-
-        items.append(
-            {
-                "row": int(row),
-                "col": int(col),
-                "crop_px": int(crop_px),
-            }
-        )
-
-    return items
-
-
-# ---------------------------------------------------------------------
 # Output paths
 # ---------------------------------------------------------------------
 
@@ -673,7 +529,7 @@ def build_output_paths(
     Parameters
     ----------
     out_root :
-        Root directory of the processed dataset.
+        Root directory of the processed datasets.
     model_name :
         Target model name.
     sensor :
@@ -881,17 +737,17 @@ def resolve_patches_per_image_for_sample(
 
 
 # ---------------------------------------------------------------------
-# Build dataset
+# Build datasets
 # ---------------------------------------------------------------------
 
 def build_processed_dataset(resolved: Dict[str, Any]) -> None:
     """
-    Build the offline preprocessed GeoTIFF dataset.
+    Build the offline preprocessed GeoTIFF datasets.
 
     Parameters
     ----------
     resolved :
-        Dictionary containing all resolved preprocessing arguments.
+        Dictionary containing all resolved datasets arguments.
     """
     samples_path = resolved["samples"]
     model_name = resolved["model_name"]
@@ -967,7 +823,7 @@ def build_processed_dataset(resolved: Dict[str, Any]) -> None:
                     max_patches_per_image=max_patches_per_image,
                 )
 
-                items = make_random_items(
+                items = sample_random_valid_windows(
                     sample=sample,
                     info=info,
                     crop_px=crop_px,
@@ -1146,7 +1002,7 @@ def parse_args():
         type=str,
         default=None,
         help=(
-            "Training YAML config containing a `preprocessing` section. "
+            "Training YAML config containing a `datasets` section. "
             "Recommended mode."
         ),
     )
@@ -1192,21 +1048,21 @@ def parse_args():
         "--override-patches-per-image",
         type=int,
         default=None,
-        help="Optional override for preprocessing.patches_per_image.",
+        help="Optional override for datasets.patches_per_image.",
     )
 
     parser.add_argument(
         "--override-patch-size-px",
         type=int,
         default=None,
-        help="Optional override for preprocessing.patch_size_px.",
+        help="Optional override for datasets.patch_size_px.",
     )
 
     parser.add_argument(
         "--override-stride-px",
         type=int,
         default=None,
-        help="Optional override for preprocessing.stride_px.",
+        help="Optional override for datasets.stride_px.",
     )
 
     return parser.parse_args()
@@ -1216,9 +1072,9 @@ def main() -> None:
     """
     CLI entry point.
 
-    The function resolves preprocessing arguments either from a training config
+    The function resolves datasets arguments either from a training config
     YAML or from legacy explicit CLI arguments, then builds the processed
-    GeoTIFF dataset.
+    GeoTIFF datasets.
     """
     args = parse_args()
 

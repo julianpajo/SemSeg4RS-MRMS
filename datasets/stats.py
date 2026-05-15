@@ -1,5 +1,5 @@
 """
-preprocessing/stats.py
+datasets/stats.py
 ----------------------
 
 Dataset statistics utilities for remote-sensing data.
@@ -9,7 +9,7 @@ This module is used to:
   - compute per-channel mean/std;
   - compute class distribution;
   - estimate the invalid-pixel fraction;
-  - debug dataset content.
+  - debug datasets content.
 
 It should preferably be used only on the training set.
 """
@@ -21,7 +21,7 @@ from typing import Dict, Optional
 import torch
 from tqdm import tqdm
 
-from .preprocess import IGNORE_INDEX
+from datasets.preprocessing.pipeline import IGNORE_INDEX
 
 
 @torch.no_grad()

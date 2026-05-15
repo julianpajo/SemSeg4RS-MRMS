@@ -1,5 +1,5 @@
 """
-scripts/generate_training_configs.py
+scripts/generate_configs.py
 ------------------------------------
 
 Automatically generate training YAML configs for:
@@ -21,42 +21,42 @@ Automatically generate training YAML configs for:
 
 Output
 ------
-    configs/training/{model}/{dataset}/online.yaml
-    configs/training/{model}/{dataset}/offline.yaml
+    configs/training/{model}/{datasets}/online.yaml
+    configs/training/{model}/{datasets}/offline.yaml
 
 Usage
 -----
-    python scripts/generate_training_configs.py
+    python scripts/generate_configs.py
 
 Overwrite existing files:
 
-    python scripts/generate_training_configs.py --overwrite
+    python scripts/generate_configs.py --overwrite
 
 Generate only one model:
 
-    python scripts/generate_training_configs.py --models crossearth --overwrite
+    python scripts/generate_configs.py --models crossearth --overwrite
 
-Generate only one dataset/setup:
+Generate only one datasets/setup:
 
-    python scripts/generate_training_configs.py --datasets mixed --overwrite
+    python scripts/generate_configs.py --datasets mixed --overwrite
 
 Notes
 -----
 online.yaml:
     - uses raw split YAML files:
-        configs/splits/raw/{dataset}/train_samples.yaml
-        configs/splits/raw/{dataset}/val_samples.yaml
+        configs/splits/raw/{datasets}/train_samples.yaml
+        configs/splits/raw/{datasets}/val_samples.yaml
 
-    - preprocessing is performed online by MultiSensorSegDataset.
+    - datasets is performed online by MultiSensorSegDataset.
 
 offline.yaml:
     - uses processed split YAML files:
-        configs/splits/processed/{model}/{dataset}/train_samples.yaml
-        configs/splits/processed/{model}/{dataset}/val_samples.yaml
+        configs/splits/processed/{model}/{datasets}/train_samples.yaml
+        configs/splits/processed/{model}/{datasets}/val_samples.yaml
 
-    - includes a `preprocessing` section used by:
+    - includes a `datasets` section used by:
 
-        scripts/build_processed_dataset.py --config ... --split train|val|test
+        scripts/build_cache.py --config ... --split train|val|test
 
     - training uses ProcessedSegDataset.
 """
@@ -67,7 +67,12 @@ import argparse
 import math
 from pathlib import Path
 from typing import Any, Dict, List
+import sys
 
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from configs.training_configs import loss_config, training_config
 import yaml
 
 
@@ -236,7 +241,7 @@ def offline_data_config(model_name: str, dataset_name: str) -> Dict[str, Any]:
 
       - training reads preprocessed GeoTIFF files;
       - crop, band selection, normalization, resize and label remapping have
-        already been performed by build_processed_dataset.py.
+        already been performed by build_cache.py.
 
     Parameters
     ----------
@@ -453,12 +458,12 @@ def build_patches_per_sensor(
 
 
 # ---------------------------------------------------------------------
-# Offline preprocessing configs
+# Offline datasets configs
 # ---------------------------------------------------------------------
 
 def preprocessing_config(model_name: str, dataset_name: str) -> Dict[str, Any]:
     """
-    Build the preprocessing section used by scripts/build_processed_dataset.py.
+    Build the datasets section used by scripts/build_cache.py.
 
     This section is used only by offline configs.
 
@@ -483,7 +488,7 @@ def preprocessing_config(model_name: str, dataset_name: str) -> Dict[str, Any]:
     Returns
     -------
     dict
-        YAML-ready preprocessing configuration.
+        YAML-ready datasets configuration.
     """
     patch_size_px = 512
     max_patches_per_image = 20
@@ -529,7 +534,7 @@ def preprocessing_config(model_name: str, dataset_name: str) -> Dict[str, Any]:
         "stride_px": patch_size_px,
 
         # Used only for train random patch extraction.
-        # If dataset is mixed, build_processed_dataset.py will use
+        # If datasets is mixed, build_cache.py will use
         # patches_per_image_by_sensor.
         "patches_per_image": patches_per_image,
         "patches_per_image_by_sensor": patches_by_sensor,
@@ -544,127 +549,6 @@ def preprocessing_config(model_name: str, dataset_name: str) -> Dict[str, Any]:
         "skip_existing": True,
         "stop_on_error": False,
     }
-
-
-# ---------------------------------------------------------------------
-# Training configs
-# ---------------------------------------------------------------------
-
-def training_config(
-    model_name: str,
-    dataset_name: str,
-    mode: str,
-) -> Dict[str, Any]:
-    """
-    Build default training hyperparameters.
-
-    These are safe defaults. Tune batch_size, epochs and learning rates
-    depending on GPU memory and dataset size.
-
-    Parameters
-    ----------
-    model_name :
-        Target model name.
-    dataset_name :
-        Dataset/sensor setup name.
-    mode :
-        Training mode, either "online" or "offline".
-
-    Returns
-    -------
-    dict
-        YAML-ready training configuration.
-    """
-    cfg = {
-        "epochs": 30,
-        "batch_size": 1,
-        "num_workers": 0,
-        "pin_memory": True,
-        "drop_last": True,
-        "optimizer": "adamw",
-        "weight_decay": 0.01,
-        "warmup_steps": 100,
-        "grad_clip": 1.0,
-        "amp": True,
-        "log_every": 1,
-        "print_per_class_every": 5,
-        "output_dir": "outputs",
-        "checkpoint_dir": "outputs/checkpoints",
-    }
-
-    if model_name == "crossearth":
-        cfg.update(
-            {
-                "lr_patch_embed": 1.0e-5,
-                "lr_rein": 1.0e-4,
-                "lr_decoder": 1.0e-3,
-                "lr_backbone": 1.0e-5,
-            }
-        )
-
-    elif model_name == "deeplabv3plus":
-        cfg.update(
-            {
-                "lr": 1.0e-4,
-                "batch_size": 2,
-            }
-        )
-
-    elif model_name == "segformer_sae":
-        cfg.update(
-            {
-                "lr": 1.0e-4,
-                "batch_size": 2,
-            }
-        )
-
-    elif model_name == "dofa":
-        cfg.update(
-            {
-                "lr": 1.0e-4,
-                "lr_backbone": 1.0e-5,
-                "batch_size": 1,
-            }
-        )
-
-    # Mixed datasets are usually heavier and safer with smaller batches.
-    if dataset_name == "mixed":
-        cfg["batch_size"] = min(int(cfg["batch_size"]), 1)
-
-    return cfg
-
-
-def loss_config(model_name: str) -> Dict[str, Any]:
-    """
-    Build the loss section.
-
-    build_loss() decides the model-specific loss internally.
-    For segformer_sae, it can use WIL if implemented.
-
-    Parameters
-    ----------
-    model_name :
-        Target model name.
-
-    Returns
-    -------
-    dict
-        YAML-ready loss configuration.
-    """
-    cfg = {
-        "ignore_index": 255,
-    }
-
-    if model_name == "segformer_sae":
-        cfg.update(
-            {
-                "lambda_dice": 0.5,
-                "lambda_focal": 0.5,
-                "gamma": 2.0,
-            }
-        )
-
-    return cfg
 
 
 # ---------------------------------------------------------------------
@@ -713,10 +597,10 @@ def build_config(
         "training": training_config(model_name, dataset_name, mode),
     }
 
-    # Only offline configs need the preprocessing section.
-    # Online configs perform preprocessing directly inside MultiSensorSegDataset.
+    # Only offline configs need the datasets section.
+    # Online configs perform datasets directly inside MultiSensorSegDataset.
     if mode == "offline":
-        cfg["preprocessing"] = preprocessing_config(
+        cfg["datasets"] = preprocessing_config(
             model_name=model_name,
             dataset_name=dataset_name,
         )
@@ -784,7 +668,7 @@ def generate_configs(
     models :
         List of model names to generate.
     datasets :
-        List of dataset/setup names to generate.
+        List of datasets/setup names to generate.
     """
     written = 0
     skipped = 0
@@ -878,7 +762,7 @@ def main() -> None:
     """
     CLI entry point.
 
-    Generate YAML configs for the selected model/dataset combinations.
+    Generate YAML configs for the selected model/datasets combinations.
     """
     args = parse_args()
 

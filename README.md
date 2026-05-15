@@ -234,19 +234,19 @@ configs/training/{model_name}/{sensor_setup}/offline.yaml
 ## 3.1 Generate All Configs
 
 ```powershell
-python scripts/generate_training_configs.py
+python scripts/generate_configs.py
 ```
 
 ## 3.2 Overwrite Existing Configs
 
 ```powershell
-python scripts/generate_training_configs.py --overwrite
+python scripts/generate_configs.py --overwrite
 ```
 
 ## 3.3 Generate Only CrossEarth Configs
 
 ```powershell
-python scripts/generate_training_configs.py --models crossearth --overwrite
+python scripts/generate_configs.py --models crossearth --overwrite
 ```
 
 ## 3.4 Generate Only Mixed Configs
@@ -343,7 +343,7 @@ label shape = (B, 224, 224)
 ### Example: Check PlanetScope Train — CrossEarth
 
 ```powershell
-python scripts/check_dataset.py --samples configs/splits/raw/planetscope/train_samples.yaml --model-name crossearth --split train --patch-size-px 512 --batch-size 4 --num-workers 0 --expected-channels 4 --expected-size 504 --max-batches 5
+python scripts/inspect_dataset.py --samples configs/splits/raw/planetscope/train_samples.yaml --model-name crossearth --split train --patch-size-px 512 --batch-size 4 --num-workers 0 --expected-channels 4 --expected-size 504 --max-batches 5
 ```
 
 ---
@@ -371,13 +371,13 @@ configs/training/{model_name}/{sensor_setup}/online.yaml
 ### Example: CrossEarth PlanetScope Online Fine-Tuning
 
 ```powershell
-python train/train.py --config configs/training/crossearth/planetscope/online.yaml --device cuda:0 --train-mode finetune
+python pl_modules\run_train.py --config configs/training/crossearth/planetscope/online.yaml --device 0 --train-mode finetune
 ```
 
 ### Example: CrossEarth PlanetScope Online Training from Scratch
 
 ```powershell
-python train/train.py --config configs/training/crossearth/planetscope/online.yaml --device cuda:0 --train-mode scratch
+python pl_modules\run_train.py --config configs/training/crossearth/planetscope/online.yaml --device 0 --train-mode scratch
 ```
 
 
@@ -427,9 +427,9 @@ configs/splits/processed/{model_name}/{sensor_setup}/
 ## 6.1 Build Processed Dataset — Example: CrossEarth PlanetScope
 
 ```powershell
-python scripts/build_processed_dataset.py --config configs/training/crossearth/planetscope/offline.yaml --split train
-python scripts/build_processed_dataset.py --config configs/training/crossearth/planetscope/offline.yaml --split val
-python scripts/build_processed_dataset.py --config configs/training/crossearth/planetscope/offline.yaml --split test
+python scripts/build_cache.py --config configs/training/crossearth/planetscope/offline.yaml --split train
+python scripts/build_cache.py --config configs/training/crossearth/planetscope/offline.yaml --split val
+python scripts/build_cache.py --config configs/training/crossearth/planetscope/offline.yaml --split test
 ```
 
 ---
@@ -456,13 +456,13 @@ configs/training/{model_name}/{sensor_setup}/offline.yaml
 ### Example: CrossEarth PlanetScope Offline Fine-Tuning
 
 ```powershell
-python train/train.py --config configs/training/crossearth/planetscope/offline.yaml --device cuda:0 --train-mode finetune
+python pl_modules\run_train.py --config configs\training\crossearth\planetscope\offline.yaml --device 0 --train-mode finetune
 ```
 
-### Example: PlanetScope Offline Training from Scratch
+### Example: CrossEarth PlanetScope Offline Training from Scratch
 
 ```powershell
-python train/train.py --config configs/training/crossearth/planetscope/offline.yaml --device cuda:0 --train-mode scratch
+python pl_modules\run_train.py --config configs\training\crossearth\planetscope\offline.yaml --device 0 --train-mode scratch
 ```
 
 ---

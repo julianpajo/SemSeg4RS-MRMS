@@ -34,7 +34,7 @@ Single-sensor usage
 Multi-sensor usage
 ------------------
     python scripts/create_splits.py ^
-        --dataset-root data/raw ^
+        --datasets-root data/raw ^
         --sensors spot planetscope ^
         --out-dir configs/splits ^
         --train-ratio 0.7 ^
@@ -303,7 +303,7 @@ def build_samples_multi_sensor(args) -> Tuple[List[Dict], Dict]:
 
     Required arguments:
 
-        --dataset-root data/raw
+        --datasets-root data/raw
         --sensors spot planetscope
 
     Expected structure:
@@ -533,10 +533,10 @@ def main() -> None:
 
     # Multi-sensor mode.
     parser.add_argument(
-        "--dataset-root",
+        "--datasets-root",
         type=str,
         default=None,
-        help="Multi-sensor dataset root, e.g. data/raw.",
+        help="Multi-sensor datasets root, e.g. data/raw.",
     )
 
     parser.add_argument(
@@ -644,7 +644,7 @@ def main() -> None:
     elif multi_mode:
         if args.dataset_root is None or args.sensors is None:
             raise ValueError(
-                "Multi-sensor mode requires --dataset-root and --sensors."
+                "Multi-sensor mode requires --datasets-root and --sensors."
             )
 
         samples, discovery_summary = build_samples_multi_sensor(args)
@@ -653,7 +653,7 @@ def main() -> None:
         raise ValueError(
             "You must specify one mode:\n"
             "  Single sensor: --images --labels --sensor --sensor-config\n"
-            "  Multi-sensor : --dataset-root --sensors"
+            "  Multi-sensor : --datasets-root --sensors"
         )
 
     if len(samples) == 0:
