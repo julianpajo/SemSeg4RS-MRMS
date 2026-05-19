@@ -325,7 +325,7 @@ def build_samples_multi_sensor(args) -> Tuple[List[Dict], Dict]:
         summary :
             Discovery summary.
     """
-    dataset_root = Path(args.dataset_root)
+    dataset_root = Path(args.datasets_root)
     sensor_config_root = Path(args.sensor_config_root)
     make_relative_to = Path(args.relative_to) if args.relative_to else None
 
@@ -619,7 +619,7 @@ def main() -> None:
     )
 
     multi_mode = (
-        args.dataset_root is not None
+        args.datasets_root is not None
         or args.sensors is not None
     )
 
@@ -642,7 +642,7 @@ def main() -> None:
         samples, discovery_summary = build_samples_single_sensor(args)
 
     elif multi_mode:
-        if args.dataset_root is None or args.sensors is None:
+        if args.datasets_root is None or args.sensors is None:
             raise ValueError(
                 "Multi-sensor mode requires --datasets-root and --sensors."
             )
