@@ -40,9 +40,16 @@ import torch.nn.functional as F
 
 class SobelFilter(nn.Module):
     """
-    Applies the Sobel filter independently to each channel (depthwise).
-    It has no trainable parameters — it acts as a stable geometric prior.
-    Output: gradient magnitude, same shape as the input.
+    Non-trainable depthwise Sobel filter used as a geometric boundary prior.
+
+    Applies the Sobel operator independently to each input channel and returns
+    the gradient magnitude. Weights are fixed buffers — no parameters are learned.
+
+    Args:
+        x: Input tensor of shape (B, C, H, W).
+
+    Returns:
+        Gradient magnitude tensor of shape (B, C, H, W).
     """
 
     def __init__(self):
@@ -74,9 +81,17 @@ class SobelFilter(nn.Module):
 
 class DPRModule(nn.Module):
     """
-    Path 1: DWConv3×3 → PWConv1×1 → BN+GeLU
-    Path 2: Sobel(∇F) → Conv3×3   → BN+GeLU
-    Concat → Conv1×1 → BN+GeLU → Output (same C as the input)
+    Dual-Path Refine (DPR) module [Eq. 7, Figure 6].
+
+    Combines a texture path (depthwise-separable convolution) with a boundary
+    path (non-trainable Sobel gradient) and fuses them via channel concatenation.
+
+    Path 1 — texture:   DWConv3×3 → PWConv1×1 → BN → GeLU
+    Path 2 — boundary:  Sobel(∇F) → Conv3×3   → BN → GeLU
+    Fusion:             Concat([P1, P2]) → Conv1×1 → BN → GeLU
+
+    Args:
+        channels: Number of input (and output) channels.
     """
 
     def __init__(self, channels: int):
@@ -120,9 +135,17 @@ class DPRModule(nn.Module):
 
 class MBAModule(nn.Module):
     """
-    4 parallel branches: Conv3×3, Conv5×5, Conv7×7 + Sobel
-    Concat → Conv1×1 → BN → Sigmoid → attention map A
-    Output: F ⊙ A  (boundary-amplified features)
+    Multi-scale Boundary Attention (MBA) module [Eq. 8-9, Figure 7].
+
+    Extracts multi-scale boundary cues via four parallel branches
+    (Conv3×3, Conv5×5, Conv7×7, and a Sobel gradient branch), then
+    produces a spatial attention map that amplifies boundary regions.
+
+        A = σ( Conv1×1( Concat[M3, M5, M7, ∇F] ) )   [Eq. 8]
+        F_mba = F ⊙ A                                  [Eq. 9]
+
+    Args:
+        channels: Number of input (and output) channels.
     """
 
     def __init__(self, channels: int):
@@ -175,6 +198,15 @@ class MBAModule(nn.Module):
 # ---------------------------------------------------------------------------
 
 class BlockA(nn.Module):
+    """
+    Block A: DPR → MBA → 2× bilinear upsample.
+
+    Applies boundary refinement (DPR) followed by multi-scale boundary
+    attention (MBA), then doubles the spatial resolution.
+
+    Args:
+        channels: Number of input (and output) channels.
+    """
     def __init__(self, channels: int):
         super().__init__()
         self.dpr = DPRModule(channels)
@@ -192,6 +224,16 @@ class BlockA(nn.Module):
 # ---------------------------------------------------------------------------
 
 class BlockB(nn.Module):
+    """
+    Block B: Conv3×3 → BN → GeLU.
+
+    Lightweight fusion block applied after skip-connection concatenation
+    to project the merged features to the target channel count.
+
+    Args:
+        in_channels:  Number of input channels (concatenated tensor).
+        out_channels: Number of output channels.
+    """
     def __init__(self, in_channels: int, out_channels: int):
         super().__init__()
         self.block = nn.Sequential(
@@ -210,20 +252,31 @@ class BlockB(nn.Module):
 
 class BRDDecoder(nn.Module):
     """
-    Progressive upsampling decoder with skip connections and boundary-aware
-    refinement.
+    Boundary-Refined Decoder (BRD).
 
-    Pipeline [Eq. 10]:
-      F4 → A4 → Concat(A4_up, F3) → B3 → x3
-      x3 → A3 → Concat(A3_up, F2) → B2 → x2
-      x2 → A2 → Concat(A2_up, F1) → B1 → F5
+    Progressive upsampling decoder with lateral skip connections and
+    boundary-aware feature refinement at each scale [Eq. 10].
 
-    Parameters
-    ----------
-    encoder_channels : list[int]
-        Channels for [F1, F2, F3, F4], default [64, 128, 320, 512].
-    out_channels : int
-        F5 output channels (default 64, aligned with F1).
+    Pipeline:
+        F4 → proj4 → A4 → 2×UP ─┐
+                        F3 ───── Concat → B3 → x3
+        x3 → A3 → 2×UP ──────────┐
+                        F2 ─────── Concat → B2 → x2
+        x2 → A2 → 2×UP ──────────┐
+                        F1 ─────── Concat → B1 → F5
+
+    Args:
+        encoder_channels: Channel counts for [F1, F2, F3, F4].
+                        Defaults to [64, 128, 320, 512].
+        out_channels:     Number of channels in the output feature map F5.
+                        Defaults to 64 (aligned with F1).
+
+    Inputs:
+        features: List of encoder feature maps [F1, F2, F3, F4],
+                at spatial resolutions [H/4, H/8, H/16, H/32].
+
+    Returns:
+        F5: Boundary-refined feature map of shape (B, out_channels, H/4, W/4).
     """
 
     def __init__(

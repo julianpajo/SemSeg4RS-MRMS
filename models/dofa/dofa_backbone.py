@@ -1,19 +1,20 @@
 """
-dofa Backbone – wrapper around torchgeo
-----------------------------------------
-Imports dofa directly from torchgeo (dofa_base_patch16_224 /
-dofa_large_patch16_224) and adds forward hooks on the transformer
-blocks to extract multi-scale features for segmentation.
+DOFABackbone – torchgeo DOFA wrapper with multi-scale feature extraction
+-------------------------------------------------------------------------
+Wraps the torchgeo DOFA vision transformer and registers forward hooks on
+selected transformer blocks to extract intermediate patch-token features
+for dense segmentation tasks.
 
-dofa is a plain ViT with wave-dynamic DOFAEmbedding instead of the
-standard patch embedding — it accepts images with any number of
-bands as long as wavelengths are provided in µm.
+DOFA is a plain ViT with a wave-dynamic DOFAEmbedding in place of the
+standard patch embedding, accepting images with an arbitrary number of
+spectral bands provided the corresponding wavelengths (in µm) are supplied.
 
-Available variants:
-  "small"  → dofa_small_patch16_224   embed=384,  depth=12  (no official weights)
-  "base"   → dofa_base_patch16_224    embed=768,  depth=12  ← DOFABase16_Weights
-  "large"  → dofa_large_patch16_224   embed=1024, depth=24  ← DOFALarge16_Weights
-  "huge"   → dofa_huge_patch14_224    embed=1280, depth=32  (no official weights)
+Available variants
+------------------
+    "small"  → dofa_small_patch16_224   embed=384,  depth=12  (no official weights)
+    "base"   → dofa_base_patch16_224    embed=768,  depth=12  ← DOFABase16_Weights.DOFA_MAE
+    "large"  → dofa_large_patch16_224   embed=1024, depth=24  ← DOFALarge16_Weights.DOFA_MAE
+    "huge"   → dofa_huge_patch14_224    embed=1280, depth=32  (no official weights)
 """
 
 import math
@@ -58,13 +59,20 @@ _WEIGHTS = {
 
 class DOFABackbone(nn.Module):
     """
-    dofa backbone with multi-scale extraction via forward hooks.
+    DOFA backbone with multi-scale feature extraction via forward hooks.
 
-    Parameters
-    ----------
-    variant     : "small" | "base" | "large" | "huge"
-    pretrained  : bool   load pretrained MAE weights (base and large only)
-    out_indices : list   block indices from which features are extracted
+    Hooks are attached to the transformer blocks at out_indices and capture
+    patch tokens (CLS token excluded) before the final layer norm. The tokens
+    are then reshaped into 2-D spatial feature maps.
+
+    Args:
+        variant:     DOFA model size, one of
+                    ['small', 'base', 'large', 'huge'] (default 'base').
+        pretrained:  Load MAE pretrained weights from torchgeo (default True).
+                    Only available for 'base' and 'large'; other variants
+                    fall back to random initialisation.
+        out_indices: Transformer block indices from which to extract features.
+                    Defaults to four evenly-spaced indices based on model depth.
     """
 
     def __init__(
@@ -110,7 +118,18 @@ class DOFABackbone(nn.Module):
         return hook
 
     def _interpolate_pos_embed(self, x: torch.Tensor):
-        """Interpolates pos_embed for inputs with a size different from 224×224."""
+        """
+        Interpolate the positional embedding to match a spatial resolution
+        different from the 224×224 size used during MAE pretraining.
+
+        The CLS token embedding is kept unchanged; only the patch positional
+        embeddings are bilinearly resized from (H_train/p, W_train/p) to
+        (H/p, W/p). The result is written back as a non-trainable parameter.
+
+        Args:
+            x: Input image tensor of shape (B, C, H, W). Used to infer the
+            target grid size; pixel values are not accessed.
+        """
         img_h, img_w = x.shape[-2], x.shape[-1]
         h = img_h // self.patch_size
         w = img_w // self.patch_size
@@ -136,14 +155,13 @@ class DOFABackbone(nn.Module):
 
     def forward(self, x: torch.Tensor, wavelengths: list) -> list:
         """
-        Parameters
-        ----------
-        x           : (B, C, H, W)
-        wavelengths : list[float]   wavelengths in µm, len == C
+        Args:
+            x:           Multi-spectral image of shape (B, C, H, W).
+            wavelengths: List of C wavelengths in µm, one per input band.
 
-        Returns
-        -------
-        list of 4× (B, embed_dim, H/p, W/p)
+        Returns:
+            List of four feature maps, each of shape (B, embed_dim, H/p, W/p),
+            corresponding to the transformer blocks at out_indices (ascending order).
         """
         self._feat_cache.clear()
         h = x.shape[-2] // self.patch_size
@@ -162,5 +180,12 @@ class DOFABackbone(nn.Module):
         return features
 
     def freeze(self, freeze: bool = True):
+        """
+        Freeze or unfreeze all backbone parameters.
+
+        Args:
+            freeze: If True, disables gradient computation for all backbone
+                    parameters. If False, re-enables it (default True).
+        """
         for p in self.model.parameters():
             p.requires_grad = not freeze

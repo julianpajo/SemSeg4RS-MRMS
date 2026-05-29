@@ -3,13 +3,14 @@ SegFormer Decoder Heads
 -----------------------
 
 SegFormerHead
-    Original SegFormer decoder: fuses [F1, F2, F3, F4] with MLP projections.
-    Used when BRD is disabled.
+    Original SegFormer all-MLP decoder head. Fuses multi-scale features
+    [F1, F2, F3, F4] via per-scale linear projections and produces
+    full-resolution logits. Used when the BRD decoder is disabled.
 
 ClassifierHead
-    Lightweight classifier head that receives F5 (BRDDecoder output, already at H/4)
-    and produces full-resolution logits.
-    Pipeline: Conv3×3 → BN → GeLU → Dropout → Conv1×1 → 4× UP
+    Lightweight classifier head that operates directly on F5, the
+    boundary-refined feature map output by BRDDecoder (already at H/4).
+    Pipeline: Conv3×3 → BN → GeLU → Dropout → Conv1×1 → 4× bilinear UP.
 """
 
 import torch
@@ -19,16 +20,19 @@ import torch.nn.functional as F
 
 class SegFormerHead(nn.Module):
     """
-    Parameters
-    ----------
-    in_channels : list[int]
-        Channel sizes of [F1, F2, F3, F4], e.g. [64, 128, 320, 512].
-    embed_dim : int
-        Unified embedding dimension for the MLP layers (default 256).
-    num_classes : int
-        Number of segmentation classes.
-    dropout : float
-        Dropout probability before the final 1×1 conv.
+    All-MLP decoder head from the original SegFormer architecture.
+
+    Projects each encoder stage to a common embedding dimension, upsamples
+    all scales to F1 resolution (H/4), concatenates them, and applies a
+    fusion block followed by a classifier pipeline to produce full-resolution
+    logits.
+
+    Args:
+        in_channels: Channel counts for [F1, F2, F3, F4],
+                    e.g. [64, 128, 320, 512].
+        embed_dim:   Unified projection dimension for all MLP layers (default 256).
+        num_classes: Number of output segmentation classes (default 14).
+        dropout:     Dropout probability applied before the final Conv1×1 (default 0.1).
     """
 
     def __init__(
@@ -59,15 +63,13 @@ class SegFormerHead(nn.Module):
 
     def forward(self, features: list) -> torch.Tensor:
         """
-        Parameters
-        ----------
-        features : [F1, F2, F3, F4]
-            F1 is at H/4, F4 at H/32 (highest semantic level).
+        Args:
+            features: List of encoder feature maps [F1, F2, F3, F4],
+                    at spatial resolutions [H/4, H/8, H/16, H/32].
 
-        Returns
-        -------
-        torch.Tensor  (B, num_classes, H, W)
-            Logits at full input resolution (after 4× upsampling).
+        Returns:
+            Logits of shape (B, num_classes, H, W) at full input resolution,
+            obtained via 4× bilinear upsampling.
         """
         # Target spatial size = F1 resolution (H/4, W/4)
         target_h, target_w = features[0].shape[-2:]
@@ -102,15 +104,17 @@ class SegFormerHead(nn.Module):
 
 class ClassifierHead(nn.Module):
     """
-    Lightweight classifier head that operates on F5 (BRDDecoder output).
+    Lightweight classifier head for the BRD-enabled pipeline.
 
-    Pipeline: Conv3×3 → BN → GeLU → Dropout → Conv1×1 → 4× UP
+    Receives F5 from BRDDecoder (already at H/4) and produces full-resolution
+    logits via a simple conv pipeline followed by 4× bilinear upsampling.
 
-    Parameters
-    ----------
-    in_channels : int   F5 channels (default 64)
-    num_classes : int   segmentation classes
-    dropout     : float dropout before Conv1×1
+        F5 → Conv3×3 → BN → GeLU → Dropout → Conv1×1 → 4× UP → logits
+
+    Args:
+        in_channels: Number of channels in F5 (default 64).
+        num_classes: Number of output segmentation classes (default 14).
+        dropout:     Dropout probability applied before the final Conv1×1 (default 0.1).
     """
 
     def __init__(
@@ -128,13 +132,11 @@ class ClassifierHead(nn.Module):
 
     def forward(self, f5: torch.Tensor) -> torch.Tensor:
         """
-        Parameters
-        ----------
-        f5 : (B, in_channels, H/4, W/4)
+        Args:
+            f5: Boundary-refined feature map of shape (B, in_channels, H/4, W/4).
 
-        Returns
-        -------
-        logits : (B, num_classes, H, W)
+        Returns:
+            Logits of shape (B, num_classes, H, W) at full input resolution.
         """
         x = self.conv3x3(f5)
         x = self.bn(x)

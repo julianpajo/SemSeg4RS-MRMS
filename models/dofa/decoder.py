@@ -1,14 +1,18 @@
 """
-Decoder for dofa Segmentation
---------------------------------
-dofa is a plain ViT → all 4 feature maps come out at the same
-spatial resolution (H/patch_size, W/patch_size) with embed_dim channels.
+Decoders for DOFASeg
+---------------------
+Since DOFA is a plain ViT, all four extracted feature maps share the same
+spatial resolution (H/patch_size, W/patch_size) and channel dimension
+(embed_dim). Two decoder variants are provided:
 
-Two decoders:
+    LinearDecoder  — concatenates all scales, then applies a minimal
+                     Conv1×1 projection pipeline. Lightweight baseline.
 
-  LinearDecoder  — concat + Conv1×1, minimal
-  MLADecoder     — Multi-Level Aggregation, progressive sum + Conv3×3
-                   more expressive, recommended by default
+    MLADecoder     — Multi-Level Aggregation: projects each scale
+                     independently, then accumulates features via a
+                     progressive sum from the deepest to the shallowest
+                     stage, followed by a Conv3×3 refinement block.
+                     More expressive; recommended default.
 """
 
 import torch
@@ -18,15 +22,22 @@ import torch.nn.functional as F
 
 class LinearDecoder(nn.Module):
     """
-    Linear decoder: concat 4 scales → Conv1×1 → BN → GeLU → Dropout → Conv1×1 → UP.
+    Minimal linear decoder for ViT-based backbones with isotropic feature maps.
 
-    Parameters
-    ----------
-    embed_dim   : int   channels of each feature map, e.g. 768 for base, 1024 for large
-    decoder_dim : int   intermediate channels
-    num_classes : int   segmentation classes
-    patch_size  : int   backbone patch size (16 or 14) — final upsampling scale
-    dropout     : float
+    Concatenates all four feature maps along the channel dimension, then
+    applies a two-stage Conv1×1 projection pipeline to produce logits, which
+    are upsampled to full resolution by a single bilinear interpolation.
+
+        Concat([F1, F2, F3, F4]) → Conv1×1 → BN → GeLU → Dropout → Conv1×1 → patch_size× UP
+
+    Args:
+        embed_dim:   Channel dimension of each input feature map
+                    (e.g. 768 for base, 1024 for large).
+        decoder_dim: Intermediate projection dimension (default 256).
+        num_classes: Number of output segmentation classes (default 14).
+        patch_size:  Backbone patch size used as the final upsampling factor
+                    (16 for base/large, 14 for huge).
+        dropout:     Dropout probability before the final Conv1×1 (default 0.1).
     """
 
     def __init__(
@@ -57,18 +68,27 @@ class LinearDecoder(nn.Module):
 
 class MLADecoder(nn.Module):
     """
-    Multi-Level Aggregation decoder.
+    Multi-Level Aggregation (MLA) decoder for ViT-based backbones.
 
-    Each scale → projection → decoder_dim, then progressive sum
-    from the deepest feature, followed by Conv3×3 refinement + UP.
+    Projects each of the four feature maps independently to a common
+    decoder_dim, then aggregates them via a progressive element-wise sum
+    from the deepest stage to the shallowest (F4 → F3 → F2 → F1).
+    A Conv3×3 refinement block is applied to the aggregated features before
+    upsampling to full resolution.
 
-    Parameters
-    ----------
-    embed_dim   : int   channels of each feature map
-    decoder_dim : int   intermediate channels (default 256 for base, 512 for large)
-    num_classes : int   segmentation classes
-    patch_size  : int   backbone patch size
-    dropout     : float
+        Fi → Conv1×1 → BN → ReLU  (×4, independently)
+        x  = F4_proj + F3_proj + F2_proj + F1_proj  (progressive accumulation)
+        x  → Conv3×3 → BN → GeLU → Dropout → Conv1×1 → patch_size× UP
+
+    Args:
+        embed_dim:   Channel dimension of each input feature map
+                    (e.g. 768 for base, 1024 for large).
+        decoder_dim: Intermediate channel dimension after per-scale projection
+                    (default 256 for base, 512 for large).
+        num_classes: Number of output segmentation classes (default 14).
+        patch_size:  Backbone patch size used as the final upsampling factor
+                    (16 for base/large, 14 for huge).
+        dropout:     Dropout probability before the final Conv1×1 (default 0.1).
     """
 
     def __init__(
@@ -103,13 +123,12 @@ class MLADecoder(nn.Module):
 
     def forward(self, features: list) -> torch.Tensor:
         """
-        Parameters
-        ----------
-        features : [F1, F2, F3, F4]  — (B, embed_dim, h, w) each
+        Args:
+            features: List of four feature maps [F1, F2, F3, F4],
+                    each of shape (B, embed_dim, h, w), where h = H/patch_size.
 
-        Returns
-        -------
-        logits : (B, num_classes, H, W)
+        Returns:
+            Logits of shape (B, num_classes, H, W) at full input resolution.
         """
         projs = [p(f) for p, f in zip(self.projs, features)]   # 4×(B, D, h, w)
 

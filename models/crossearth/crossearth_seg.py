@@ -1,85 +1,36 @@
 """
-crossearth – Full Segmentation Model
-------------------------------------
+CrossEarthSeg – Full Segmentation Model
+-----------------------------------------
+Assembles a DINOv2 backbone with Rein PEFT adapter and a Mask2Former-style
+decoder for dense semantic segmentation of multispectral remote sensing imagery.
 
-Assembles:
+Architecture
+------------
+    DINOv2WithRein  (dinov2_rein.py)
+        ├── DINOv2 backbone          ← torch.hub (facebookresearch/dinov2)
+        ├── Optional patch embedding replacement:
+        │       Conv2d(3,  embed_dim, 14, 14)  →  Conv2d(N, embed_dim, 14, 14)
+        └── ReinAdapter              ← lightweight trainable PEFT adapter
+            ↓
+          [F1, F2, F3, F4]  —  (B, embed_dim, H/14, W/14) each
 
-  DINOv2WithRein  (dinov2_rein.py)
-    ├── DINOv2 backbone  ← torch.hub (facebookresearch/dinov2)
-    ├── optional RGBNIR patch embedding modification:
-    │       Conv2d(3, embed_dim, 14, 14)
-    │       → Conv2d(4, embed_dim, 14, 14)
-    └── ReinAdapter      ← trainable PEFT adapter
+    Mask2FormerDecoder  (decoder.py)  ← trainable, pure PyTorch (no mmseg)
         ↓
-      [F1, F2, F3, F4] — (B, embed_dim, H/14, W/14) each
+    logits  (B, num_classes, H, W)
 
-  MLADecoder / LinearDecoder  (decoder.py)  ← trainable
-        ↓
-  logits  (B, num_classes, H, W)
+Recommended setup for RGBNIR remote sensing segmentation
+---------------------------------------------------------
+    1. Load pretrained DINOv2 weights from torch.hub.
+    2. Replace patch embedding from 3 to 4 input channels,
+       initializing the NIR channel from the mean of RGB patch weights.
+    3. Freeze the DINOv2 transformer backbone.
+    4. Train patch embedding, ReinAdapter, and Mask2FormerDecoder.
 
-Recommended setup for RGBNIR remote sensing segmentation:
-
-    - load pretrained DINOv2
-    - replace patch embedding from 3 to 4 input channels
-    - initialize NIR channel from mean RGB patch weights
-    - freeze transformer backbone
-    - train patch embedding + ReinAdapter + decoder
-
-Dataset setup for your binary segmentation case:
-
-    original labels:
-        0 = invalid_pixel
-        1 = sealed_soil
-        2 = non_sealed_soil
-
-    training labels:
-        255 = ignore_index
-        0   = sealed_soil
-        1   = non_sealed_soil
-
-    model:
-        num_classes = 2
-
-    loss:
-        torch.nn.CrossEntropyLoss(ignore_index=255)
-
-Usage
------
-
-RGB baseline:
-
-    model = CrossEarthSeg.from_pretrained(
-        variant="dinov2_vitl14_reg",
-        num_classes=2,
-        in_channels=3,
-    )
-
-    x = torch.randn(1, 3, 504, 504)
-    logits = model(x)
-
-RGBNIR:
-
-    model = CrossEarthSeg.from_pretrained(
-        variant="dinov2_vitl14_reg",
-        num_classes=2,
-        in_channels=4,
-        patch_embed_init="rgb_mean",
-        freeze_backbone=True,
-        train_patch_embed=True,
-    )
-
-    x = torch.randn(1, 4, 504, 504)
-    logits = model(x)
-
-Notes
------
-H and W must be multiples of the DINOv2 patch size, usually 14.
-Recommended sizes:
-    504 = 36 × 14
-    518 = 37 × 14
-    1008 = 72 × 14
+Spatial constraints
+-------------------
+H and W must be multiples of the DINOv2 patch size (14).
+Recommended input sizes:  504 (36×14),  518 (37×14),  1008 (72×14).
 """
-
 from __future__ import annotations
 
 from typing import Optional
@@ -88,79 +39,37 @@ import torch
 import torch.nn as nn
 
 from .dinov2_rein import DINOv2WithRein, DINOV2_CONFIGS
-from .decoder import MLADecoder, LinearDecoder
+from .decoder import Mask2FormerDecoder
 
 
 class CrossEarthSeg(nn.Module):
     """
-    Full crossearth segmentation model.
+    CrossEarth segmentation model: DINOv2 + Rein + Mask2Former decoder.
 
-    Parameters
-    ----------
-    variant:
-        DINOv2 key, e.g. "dinov2_vitl14_reg".
-
-    num_classes:
-        Number of output segmentation classes.
-        For your remapped task:
-            0 = sealed_soil
-            1 = non_sealed_soil
-        so use num_classes=2.
-
-    decoder:
-        Decoder type:
-            "mla"    -> MLADecoder, recommended
-            "linear" -> lightweight linear decoder
-
-    decoder_dim:
-        Intermediate decoder channels.
-        If None, selected automatically according to DINOv2 embed_dim.
-
-    num_tokens:
-        Learnable tokens per Rein layer.
-
-    token_dim:
-        Internal Rein token dimension.
-
-    dropout:
-        Dropout used in the decoder.
-
-    in_channels:
-        Number of input image channels:
-            3 -> RGB
-            4 -> RGBNIR
-
-    patch_embed_init:
-        Initialization for modified patch embedding when in_channels != 3.
-
-        Options:
-            "rgb_mean":
-                Copy RGB weights and initialize additional channels as
-                the mean of RGB weights. Recommended for RGBNIR with pretrained DINOv2.
-
-            "zero":
-                Copy RGB weights and initialize additional channels as zero.
-
-            "random":
-                Randomly initialize the whole new patch embedding.
-
-    freeze_backbone:
-        If True, freeze the DINOv2 transformer backbone.
-
-    train_patch_embed:
-        If True, keep patch embedding trainable even when the rest of
-        the DINOv2 backbone is frozen.
-
-        Recommended RGBNIR setup:
-            freeze_backbone=True
-            train_patch_embed=True
+    Args:
+        variant:           DINOv2 model key, e.g. 'dinov2_vitl14_reg'.
+        num_classes:       Number of output segmentation classes.
+        decoder_dim:       Intermediate decoder channels. Auto-selected from
+                        embed_dim if None.
+        num_tokens:        Number of learnable Rein tokens per layer.
+        token_dim:         Internal Rein token dimension.
+        dropout:           Dropout probability in the decoder.
+        in_channels:       Number of input image channels (3=RGB, 4=RGBNIR).
+        patch_embed_init:  Initialization strategy for the modified patch
+                        embedding when in_channels != 3.
+                        'rgb_mean': additional channels initialized as mean
+                        of RGB weights (recommended for RGBNIR).
+                        'zero': additional channels initialized to zero.
+                        'random': full random re-initialization.
+        freeze_backbone:   If True, freeze the DINOv2 transformer backbone.
+        train_patch_embed: If True, keep patch embedding trainable even when
+                        the backbone is frozen. Recommended for RGBNIR.
     """
 
     def __init__(
         self,
         variant: str = "dinov2_vitl14_reg",
         num_classes: int = 2,
-        decoder: str = "mla",
         decoder_dim: Optional[int] = None,
         num_tokens: int = 100,
         token_dim: int = 256,
@@ -178,12 +87,6 @@ class CrossEarthSeg(nn.Module):
                 f"Disponibili: {list(DINOV2_CONFIGS.keys())}"
             )
 
-        if decoder not in {"mla", "linear"}:
-            raise ValueError(
-                f"Decoder non supportato: {decoder}. "
-                "Usa 'mla' oppure 'linear'."
-            )
-
         if in_channels <= 0:
             raise ValueError(
                 f"in_channels deve essere > 0, ricevuto {in_channels}"
@@ -195,7 +98,6 @@ class CrossEarthSeg(nn.Module):
 
         self.variant = variant
         self.num_classes = num_classes
-        self.decoder_name = decoder
         self.in_channels = in_channels
         self.patch_size = patch_size
         self.freeze_backbone_flag = freeze_backbone
@@ -226,49 +128,34 @@ class CrossEarthSeg(nn.Module):
         # ------------------------------------------------------------------
         # Decoder
         # ------------------------------------------------------------------
-        if decoder == "mla":
-            self.decoder = MLADecoder(
-                embed_dim=embed_dim,
-                decoder_dim=dec_dim,
-                num_classes=num_classes,
-                patch_size=patch_size,
-                dropout=dropout,
-            )
-        else:
-            self.decoder = LinearDecoder(
-                embed_dim=embed_dim,
-                num_scales=4,
-                decoder_dim=dec_dim,
-                num_classes=num_classes,
-                patch_size=patch_size,
-                dropout=dropout,
-            )
-
+        self.decoder = Mask2FormerDecoder(
+            embed_dim=embed_dim,
+            num_classes=num_classes,
+            feat_channels=256,
+            num_queries=100,
+            num_decoder_layers=9,
+            num_heads=8,
+            dim_feedforward=2048,
+            patch_size=patch_size,
+            dropout=0.0,
+        )
+        
     # ------------------------------------------------------------------
     # Forward
     # ------------------------------------------------------------------
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Parameters
-        ----------
-        x:
-            Input tensor.
+        Args:
+            x: Input image tensor of shape (B, in_channels, H, W).
+            H and W must be multiples of patch_size (14).
 
-            RGB:
-                shape = (B, 3, H, W)
+        Returns:
+            Logits of shape (B, num_classes, H, W).
 
-            RGBNIR:
-                shape = (B, 4, H, W)
-
-            H and W must be multiples of patch_size, usually 14.
-
-        Returns
-        -------
-        logits:
-            Tensor with shape:
-
-                (B, num_classes, H, W)
+        Raises:
+            ValueError: If x does not have 4 dimensions or the channel count
+                        does not match in_channels.
         """
         if x.ndim != 4:
             raise ValueError(
@@ -299,26 +186,16 @@ class CrossEarthSeg(nn.Module):
         **kwargs,
     ) -> "CrossEarthSeg":
         """
-        Creates the model and downloads pretrained DINOv2 from torch.hub.
+        Instantiate CrossEarthSeg and download pretrained DINOv2 from torch.hub.
 
-        Example RGB:
+        Args:
+            variant:      DINOv2 model key, e.g. 'dinov2_vitl14_reg'.
+            num_classes:  Number of output segmentation classes.
+            force_reload: Force re-download of the torch.hub checkpoint.
+            **kwargs:     Additional arguments forwarded to the constructor.
 
-            model = CrossEarthSeg.from_pretrained(
-                variant="dinov2_vitl14_reg",
-                num_classes=2,
-                in_channels=3,
-            )
-
-        Example RGBNIR:
-
-            model = CrossEarthSeg.from_pretrained(
-                variant="dinov2_vitl14_reg",
-                num_classes=2,
-                in_channels=4,
-                patch_embed_init="rgb_mean",
-                freeze_backbone=True,
-                train_patch_embed=True,
-            )
+        Returns:
+            CrossEarthSeg instance with pretrained DINOv2 backbone loaded.
         """
         model = cls(
             variant=variant,
@@ -335,33 +212,30 @@ class CrossEarthSeg(nn.Module):
 
     def load_backbone_checkpoint(self, ckpt_path: str) -> "CrossEarthSeg":
         """
-        Loads the DINOv2 backbone from a local checkpoint.
+        Load the DINOv2 backbone from a local checkpoint file.
 
-        Example:
+        Args:
+            ckpt_path: Path to the local checkpoint (.pth).
 
-            model = CrossEarthSeg(
-                variant="dinov2_vitl14_reg",
-                num_classes=2,
-                in_channels=4,
-                patch_embed_init="rgb_mean",
-            )
-
-            model.load_backbone_checkpoint(
-                "checkpoints/dinov2_vitl14_pretrain.pth"
-            )
+        Returns:
+            self, for method chaining.
         """
         self.backbone_rein.load_backbone_from_checkpoint(ckpt_path)
         return self
 
     def load_rein_checkpoint(self, ckpt_path: str) -> "CrossEarthSeg":
         """
-        Loads Rein + decoder weights from a checkpoint saved during training.
+        Load Rein adapter and decoder weights from a training checkpoint.
 
-        This can also load patch embedding weights if they were saved in
-        the checkpoint and the model architecture matches.
+        Patch embedding weights are also restored if present in the checkpoint
+        and the architecture matches. Uses strict=False; missing and unexpected
+        keys are reported to stdout.
 
-        Example:
-            model.load_rein_checkpoint("checkpoints/crossearth_rgbnir.pth")
+        Args:
+            ckpt_path: Path to the checkpoint saved during training.
+
+        Returns:
+            self, for method chaining.
         """
         state = torch.load(ckpt_path, map_location="cpu")
 
@@ -389,23 +263,27 @@ class CrossEarthSeg(nn.Module):
 
     def freeze_backbone(self, freeze: bool = True) -> None:
         """
-        Freezes or unfreezes the DINOv2 backbone.
+        Freeze or unfreeze the DINOv2 backbone.
 
-        Note:
-            If train_patch_embed=True, patch embedding remains trainable
-            even when freeze=True.
+        Note: if train_patch_embed=True, the patch embedding remains trainable
+        regardless of the freeze flag.
+
+        Args:
+            freeze: If True, disables gradient computation for the backbone.
+                    If False, re-enables it (default True).
         """
         self.freeze_backbone_flag = freeze
         self.backbone_rein.set_freeze_backbone(freeze)
 
     def unfreeze_last_blocks(self, n_blocks: int = 4) -> None:
         """
-        Unfreezes only the last n DINOv2 transformer blocks.
+        Unfreeze only the last n DINOv2 transformer blocks.
 
-        Useful after an initial stable training with frozen backbone.
+        Useful for gradual fine-tuning after an initial training phase with a
+        fully frozen backbone.
 
-        Example:
-            model.unfreeze_last_blocks(n_blocks=4)
+        Args:
+            n_blocks: Number of terminal transformer blocks to unfreeze (default 4).
         """
         self.backbone_rein.unfreeze_last_blocks(n_blocks=n_blocks)
 
@@ -422,25 +300,24 @@ class CrossEarthSeg(nn.Module):
         weight_decay: float = 0.01,
     ) -> list:
         """
-        Returns optimizer parameter groups.
+        Return optimizer parameter groups with per-component learning rates.
 
-        Recommended initial setup:
+        Groups (only included if they contain trainable parameters):
+            patch_embed:    patch embedding (if trainable).
+            rein:           Rein adapter tokens and MLP.
+            decoder:        Mask2Former decoder.
+            backbone_extra: any additional trainable backbone parameters,
+                            e.g. after unfreeze_last_blocks(), excluding patch_embed.
 
-            optimizer = torch.optim.AdamW(
-                model.parameter_groups(
-                    lr_patch_embed=1e-5,
-                    lr_rein=1e-4,
-                    lr_decoder=1e-3,
-                    weight_decay=0.01,
-                )
-            )
+        Args:
+            lr_patch_embed: Learning rate for the patch embedding (default 1e-5).
+            lr_rein:        Learning rate for the Rein adapter (default 1e-4).
+            lr_decoder:     Learning rate for the decoder (default 1e-3).
+            lr_backbone:    Learning rate for unfrozen backbone blocks (default 1e-5).
+            weight_decay:   Weight decay applied to all groups (default 0.01).
 
-        Groups:
-            - patch embedding, if trainable
-            - Rein adapter
-            - decoder
-            - any additional trainable DINOv2 backbone parameters
-              excluding patch embedding, e.g. after unfreeze_last_blocks()
+        Returns:
+            List of dicts suitable for passing directly to a PyTorch optimizer.
         """
         groups = []
 
@@ -524,7 +401,13 @@ class CrossEarthSeg(nn.Module):
 
     def count_parameters(self) -> dict:
         """
-        Returns parameter counts for diagnostics.
+        Return parameter counts per component for diagnostics.
+
+        Returns:
+            Dict with keys: 'backbone_total', 'backbone_trainable',
+            'patch_embed_total', 'patch_embed_trainable', 'rein_total',
+            'rein_trainable', 'decoder_total', 'decoder_trainable',
+            'model_total', 'model_trainable'.
         """
         def count_trainable(module: Optional[nn.Module]) -> int:
             if module is None:

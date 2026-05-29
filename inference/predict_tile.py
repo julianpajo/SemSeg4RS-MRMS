@@ -296,7 +296,7 @@ def predict(args: argparse.Namespace) -> None:
     invalid_mask_raw = make_invalid_mask(x_raw, nodata_value)
 
     # -----------------------------------------------------------------
-    # Sensor configuration + datasets
+    # Sensor configuration + datasets_builder
     # -----------------------------------------------------------------
 
     info = read_sensor(
@@ -374,7 +374,7 @@ def predict(args: argparse.Namespace) -> None:
         raise ValueError(f"Invalid output_mode: {args.output_mode}")
 
     # Apply nodata mask only if requested and if invalid pixels exist.
-    # If datasets resized the image, for example from 512 to 504,
+    # If datasets_builder resized the image, for example from 512 to 504,
     # the mask is resized with nearest-neighbor interpolation using torch.
     if args.apply_nodata_mask and invalid_mask_raw.any():
         mask = torch.from_numpy(invalid_mask_raw.astype(np.float32)).unsqueeze(0).unsqueeze(0)

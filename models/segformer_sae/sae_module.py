@@ -27,8 +27,17 @@ import torch.nn.functional as F
 
 class SpectralChannelAttention(nn.Module):
     """
-    GAP → Conv1×1 (C1 → C1//r) → ReLU → Conv1×1 (C1//r → C1) → Sigmoid
-    Output is element-wise multiplied with the input feature map.
+    Squeeze-and-Excitation channel attention over spectral features.
+
+    Computes a per-channel attention vector via global average pooling and a
+    two-layer bottleneck, then rescales the input feature map element-wise.
+
+        a = σ( Conv1×1( ReLU( Conv1×1( GAP(Fp) ) ) ) )   [Eq. 3]
+        Fa = Fp ⊙ a                                        [Eq. 4]
+
+    Args:
+        channels:  Number of input/output channels (C1).
+        reduction: Bottleneck reduction ratio for the FC layers (default 8).
     """
 
     def __init__(self, channels: int, reduction: int = 8):
@@ -56,9 +65,14 @@ class SpectralChannelAttention(nn.Module):
 
 class SpectralSpatialMixing(nn.Module):
     """
-    Conv1×1 (PW) → DWConv3×3 + residual with learnable α.
+    Spectral-spatial mixing via pointwise + depthwise separable convolution
+    with a learnable residual scaling factor.
 
-    Xmix = DWConv3×3(Conv1×1(Fa)) + α * Fp   [Eq. 5]
+        X_mix = DWConv3×3( Conv1×1(Fa) ) + α · Fp   [Eq. 5]
+
+    Args:
+        channels:   Number of input/output channels (C1).
+        alpha_init: Initial value of the learnable residual scale α (default 0.1).
     """
 
     def __init__(self, channels: int, alpha_init: float = 0.1):
@@ -85,19 +99,24 @@ class SpectralSpatialMixing(nn.Module):
 
 class SAEModule(nn.Module):
     """
-    Spectral-Aware Embedding module.
+    Spectral-Aware Embedding (SAE) module [Section 3.2, Figure 4].
 
-    Parameters
-    ----------
-    in_channels : int
-        Number of input spectral bands (default 12 for multispectral imagery).
-    embed_dim : int
-        Target embedding dimension C1 aligned with the first SegFormer stage
-        (default 64, matching MiT-B2 / MiT-B5 stage-1).
-    reduction : int
-        Reduction ratio for the channel attention bottleneck (default 8).
-    alpha_init : float
-        Initial value for the learnable residual scaling factor α (default 0.1).
+    Preprocesses raw multi-band imagery into a spectrally-enhanced feature map
+    aligned with the first stage of a SegFormer encoder, following the pipeline:
+
+        X (B, in_channels, H, W)
+        → BN per-band                            [Eq. 1]
+        → Conv1×1 spectral projection  → Fp      [Eq. 2]
+        → Spectral Channel Attention   → Fa      [Eq. 3-4]
+        → Spectral-Spatial Mixing      → X_mix   [Eq. 5]
+        → LayerNorm                              [Eq. 6]
+
+    Args:
+        in_channels: Number of input spectral bands (default 12).
+        embed_dim:   Output channel dimension C1, aligned with SegFormer
+                    stage-1 (default 64 for MiT-B2 / MiT-B5).
+        reduction:   Bottleneck reduction ratio for channel attention (default 8).
+        alpha_init:  Initial value of the learnable residual scale α (default 0.1).
     """
 
     def __init__(
@@ -128,14 +147,12 @@ class SAEModule(nn.Module):
     # ------------------------------------------------------------------
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Parameters
-        ----------
-        x : torch.Tensor  (B, in_channels, H, W)
+        Args:
+            x: Raw spectral input of shape (B, in_channels, H, W).
 
-        Returns
-        -------
-        torch.Tensor  (B, embed_dim, H, W)
-            Spectrally-enhanced feature map ready for Overlap Patch Embedding.
+        Returns:
+            Spectrally-enhanced feature map of shape (B, embed_dim, H, W),
+            ready to be passed to the Overlap Patch Embedding of the encoder.
         """
         # [Eq. 1]  per-band BN
         x1 = self.band_norm(x)

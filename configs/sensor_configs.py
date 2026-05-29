@@ -1,10 +1,7 @@
 """
-Sensor configuration from YAML/JSON files.
+Sensor configuration from YAML files.
 
-New strategy
 ------------
-Sensor information is NOT inferred from GDAL, because raster metadata is often
-incomplete or inconsistent.
 
 Each sensor has a manual configuration file, for example:
 
@@ -12,13 +9,14 @@ Each sensor has a manual configuration file, for example:
     configs/sensors/planetscope.yaml
     configs/sensors/sentinel2.yaml
 
-The YAML/JSON file is the source of truth for:
+The YAML file is the source for:
 
     - name
     - wavelengths
     - bit_depth
     - band_names
     - gsd_m
+    - tile_size
     - rgbnir_idx
     - label_mapping
 

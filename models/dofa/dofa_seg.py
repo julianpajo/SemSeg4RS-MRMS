@@ -1,51 +1,56 @@
 """
 DOFASeg – Full Segmentation Model
 ----------------------------------
-Assembles:
-  DOFABackbone  (dofa_backbone.py)
-    └── dofa from torchgeo  ← pretrained wave-dynamic backbone, optionally frozen
-        ↓  [F1, F2, F3, F4] — (B, embed_dim, H/p, W/p) each
-  MLADecoder / LinearDecoder  (decoder.py)
-        ↓
-  logits  (B, num_classes, H, W)
+Assembles a wave-dynamic DOFA backbone with a lightweight segmentation
+decoder for multi-spectral remote sensing imagery.
 
-What comes from torchgeo (zero custom code):
-  - Full dofa (dofa_base_patch16_224, dofa_large_patch16_224)
-  - DOFABase16_Weights.DOFA_MAE / DOFALarge16_Weights.DOFA_MAE
-  - DOFAEmbedding (wave-dynamic patch embedding, inside torchgeo)
+Components
+----------
+DOFABackbone  (dofa_backbone.py)
+    Wraps the torchgeo DOFA vision transformer and extracts intermediate
+    features [F1, F2, F3, F4] via forward hooks.
+
+MLADecoder / LinearDecoder  (decoder.py)
+    Fuses multi-scale features and produces full-resolution logits.
+
+What comes from torchgeo (no custom code):
+    - DOFA model variants (dofa_base_patch16_224, dofa_large_patch16_224)
+    - Pretrained MAE weights (DOFABase16_Weights, DOFALarge16_Weights)
+    - DOFAEmbedding (wave-dynamic patch embedding)
 
 What is custom (~80 lines):
-  - Forward hooks to extract intermediate features  (dofa_backbone.py)
-  - MLADecoder / LinearDecoder  (decoder.py)
+    - Forward hooks for intermediate feature extraction  (dofa_backbone.py)
+    - MLADecoder / LinearDecoder  (decoder.py)
 
-Trainable parameters (base, frozen backbone):
-  MLA Decoder: ~3–5M  vs  ~86M frozen backbone
+Approximate parameter counts
+-----------------------------
+    Base backbone (frozen):   ~86M frozen  +  ~3–5M trainable decoder
+    Base backbone (unfrozen): ~89M fully trainable
 
-Trainable parameters (base, unfrozen backbone):
-  Everything: ~89M
+Input requirements
+------------------
+    - Spatial dimensions H and W must be multiples of patch_size
+      (16 for base/large, 14 for huge).
+    - MAE weights were trained at 224×224; use 224 or any multiple of 16
+      (e.g. 256, 512) for best compatibility.
+    - wavelengths: list[float] — one wavelength in µm per input band.
+
+      Examples:
+        S2  9-band:  [0.665, 0.56, 0.49, 0.705, 0.74, 0.783, 0.842, 1.61, 2.19]
+        S2 12-band:  S2_WAVELENGTHS  (from __init__.py)
+        S1  2-band:  [5.405, 5.405]
+        RGB:         [0.665, 0.56, 0.49]
 
 Usage
 -----
     from models.dofa import DOFASeg
 
-    # With pretrained frozen backbone (fine-tune decoder only)
+    # Fine-tune decoder only (frozen backbone)
     model = DOFASeg(variant="base", num_classes=14, pretrained=True, freeze_backbone=True)
-    logits = model(x, wavelengths)  # x: (B, C, H, W)
+    logits = model(x, wavelengths)   # x: (B, C, H, W)
 
-    # With unfrozen backbone (fine-tune everything)
+    # Fine-tune everything (unfrozen backbone)
     model = DOFASeg(variant="large", num_classes=14, pretrained=True, freeze_backbone=False)
-
-Input notes
------------
-  - H and W must be multiples of patch_size (16 for base/large, 14 for huge).
-  - MAE weights were trained with img_size=224 → use 224×224 for maximum
-    compatibility, or any multiple of 16, e.g. 256, 512.
-  - wavelengths: list[float]  — wavelengths in µm, one per band.
-    Examples:
-      S2 (9 bands):  [0.665, 0.56, 0.49, 0.705, 0.74, 0.783, 0.842, 1.61, 2.19]
-      S2 (12 bands): S2_WAVELENGTHS  (from __init__.py)
-      S1 (2 bands):  [5.405, 5.405]
-      RGB:           [0.665, 0.56, 0.49]
 """
 
 import torch
@@ -66,16 +71,21 @@ _DECODER_DIM = {
 
 class DOFASeg(nn.Module):
     """
-    Parameters
-    ----------
-    variant         : "small" | "base" | "large" | "huge"
-    num_classes     : int    segmentation classes
-    pretrained      : bool   pretrained MAE weights from torchgeo (base and large)
-    freeze_backbone : bool   freeze the backbone after loading
-    decoder         : str    "mla" (default) | "linear"
-    decoder_dim     : int    intermediate decoder channels (None = auto)
-    out_indices     : list   block indices for multi-scale features (None = default)
-    dropout         : float  dropout in the decoder
+    Wave-dynamic segmentation model built on DOFA + a lightweight decoder.
+
+    Args:
+        variant:         DOFA backbone size, one of
+                        ['small', 'base', 'large', 'huge'] (default 'base').
+        num_classes:     Number of output segmentation classes (default 14).
+        pretrained:      Load MAE pretrained weights from torchgeo (default True).
+                        Only available for 'base' and 'large'.
+        freeze_backbone: Freeze backbone parameters after loading (default True).
+        decoder:         Decoder architecture, 'mla' (default) or 'linear'.
+        decoder_dim:     Intermediate channel dimension in the decoder.
+                        Falls back to the variant default from _DECODER_DIM if None.
+        out_indices:     Backbone block indices from which to extract features.
+                        None uses the variant default.
+        dropout:         Dropout probability in the decoder (default 0.1).
     """
 
     def __init__(
@@ -132,6 +142,13 @@ class DOFASeg(nn.Module):
 
     # ------------------------------------------------------------------
     def freeze_backbone(self, freeze: bool = True):
+        """
+        Freeze or unfreeze all backbone parameters.
+
+        Args:
+            freeze: If True, disables gradient computation for the backbone.
+                    If False, re-enables it (default True).
+        """
         self.backbone.freeze(freeze)
 
     def parameter_groups(
@@ -141,8 +158,19 @@ class DOFASeg(nn.Module):
         weight_decay: float = 0.05,
     ) -> list:
         """
-        Separate learning rates: backbone for slow fine-tuning, if unfrozen,
-        and decoder from scratch, always trainable.
+        Return parameter groups with separate learning rates for the backbone
+        and decoder, suitable for passing directly to a PyTorch optimizer.
+
+        The backbone uses a lower learning rate for slow fine-tuning when unfrozen;
+        the decoder is always trainable and trained from scratch at a higher rate.
+
+        Args:
+            lr_backbone:  Learning rate for the backbone (default 1e-5).
+            lr_decoder:   Learning rate for the decoder (default 1e-4).
+            weight_decay: Weight decay applied to all groups (default 0.05).
+
+        Returns:
+            List of two dicts: one for the backbone and one for the decoder.
         """
         return [
             {"params": self.backbone.parameters(), "lr": lr_backbone, "weight_decay": weight_decay},
@@ -150,6 +178,16 @@ class DOFASeg(nn.Module):
         ]
 
     def count_parameters(self) -> dict:
+        """
+        Count total and trainable parameters per component.
+
+        Returns:
+            Dict with keys:
+                'backbone (total)'     – all backbone parameters,
+                'backbone (trainable)' – unfrozen backbone parameters,
+                'decoder (trainable)'  – decoder parameters,
+                'total trainable'      – all trainable parameters in the model.
+        """
         def n_trainable(m): return sum(p.numel() for p in m.parameters() if p.requires_grad)
         def n_total(m):     return sum(p.numel() for p in m.parameters())
         return {

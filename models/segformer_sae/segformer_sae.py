@@ -1,6 +1,11 @@
 """
-SegFormer + SAE + BRD  –  Full Segmentation Model
---------------------------------------------------
+SegFormerSAE – Full Segmentation Model
+---------------------------------------
+End-to-end semantic segmentation model combining:
+  - SAEModule:     spectral-aware embedding for multi-band input
+  - MiT encoder:   hierarchical transformer backbone (B0–B5 variants)
+  - BRDDecoder:    boundary-refined progressive decoder (optional)
+  - Decoder head:  ClassifierHead (BRD path) or SegFormerHead (standard path)
 """
 
 import torch
@@ -40,6 +45,22 @@ _DECODER_DIM = {
 # ---------------------------------------------------------------------------
 
 class SegFormerSAE(nn.Module):
+    """
+    SegFormer extended with Spectral-Aware Embedding and optional BRD decoder.
+
+    Args:
+        variant:      MiT backbone variant, one of
+                    ['mit-b0', ..., 'mit-b5'] (default 'mit-b2').
+        in_channels:  Number of input spectral bands (default 12).
+        num_classes:  Number of output segmentation classes (default 14).
+        use_brd:      If True, uses BRDDecoder + ClassifierHead.
+                    If False, uses the standard SegFormerHead (default True).
+        decoder_dim:  Embedding dimension for SegFormerHead. Falls back to
+                    the variant default from _DECODER_DIM if None.
+        sae_reduction: Reduction ratio for the SAE channel attention (default 8).
+        dropout:      Dropout probability in the classifier head (default 0.1).
+        drop_path:    Stochastic depth rate for the MiT encoder (default 0.1).
+    """
     def __init__(
         self,
         variant: str = "mit-b2",
@@ -109,8 +130,11 @@ class SegFormerSAE(nn.Module):
     # ------------------------------------------------------------------
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        x:      (B, in_channels, H, W)
-        return: (B, num_classes, H, W)
+        Args:
+            x: Multi-band input tensor of shape (B, in_channels, H, W).
+
+        Returns:
+            Logits of shape (B, num_classes, H, W) at full input resolution.
         """
         input_hw = x.shape[-2:]
 
@@ -149,19 +173,31 @@ class SegFormerSAE(nn.Module):
         **kwargs,
     ) -> "segformer_sae":
         """
-        Creates segformer_sae and loads compatible pretrained MiT encoder weights.
+        Instantiate SegFormerSAE and load compatible weights from a HuggingFace
+        pretrained MiT checkpoint.
 
-        Important:
-        The HuggingFace MiT checkpoint expects RGB input in the first patch
-        embedding:
+        The first patch embedding is intentionally skipped because the pretrained
+        checkpoint expects a 3-channel RGB input:
 
-            [C1, 3, 7, 7]
+            weight shape: (C1, 3, 7, 7)
 
-        This model receives SAE features instead:
+        whereas this model feeds SAE output (C1 channels) into the encoder:
 
-            [C1, C1, 7, 7]
+            weight shape: (C1, C1, 7, 7)
 
-        Therefore, the first patch embedding weights are intentionally skipped.
+        All other encoder weights are loaded with strict=False; missing and
+        unexpected keys are reported to stdout.
+
+        Args:
+            hf_model_name: HuggingFace model identifier, e.g.
+                        'nvidia/mit-b2'. The variant is inferred from
+                        the final path component.
+            in_channels:   Number of input spectral bands (default 12).
+            num_classes:   Number of output segmentation classes (default 14).
+            **kwargs:      Additional arguments forwarded to the constructor.
+
+        Returns:
+            Initialised SegFormerSAE with pretrained encoder weights.
         """
         variant = hf_model_name.split("/")[-1]
 
@@ -214,6 +250,13 @@ class SegFormerSAE(nn.Module):
 
     # ------------------------------------------------------------------
     def freeze_encoder(self, freeze: bool = True):
+        """
+        Freeze or unfreeze all encoder parameters.
+
+        Args:
+            freeze: If True, disables gradient computation for the encoder.
+                    If False, re-enables it (default True).
+        """
         for p in self.encoder.parameters():
             p.requires_grad = not freeze
 
@@ -225,6 +268,19 @@ class SegFormerSAE(nn.Module):
         lr_sae: float = 6e-4,
         weight_decay: float = 0.01,
     ) -> list:
+        """
+        Return parameter groups with per-component learning rates, suitable
+        for passing directly to a PyTorch optimizer.
+
+        Args:
+            lr_encoder:   Learning rate for the MiT encoder (default 6e-5).
+            lr_decoder:   Learning rate for the decoder head (default 6e-4).
+            lr_sae:       Learning rate for the SAE module (default 6e-4).
+            weight_decay: Weight decay applied to all groups (default 0.01).
+
+        Returns:
+            List of three dicts: one each for SAE, encoder, and decoder.
+        """
         decoder_params = (
             list(self.brd.parameters()) + list(self.cls_head.parameters())
             if self.use_brd
@@ -251,6 +307,13 @@ class SegFormerSAE(nn.Module):
 
     # ------------------------------------------------------------------
     def count_parameters(self) -> dict:
+        """
+        Count trainable parameters per component.
+
+        Returns:
+            Dict with keys 'sae', 'encoder', 'decoder', 'total',
+            each mapping to the number of trainable parameters in that component.
+        """
         def n(module: nn.Module) -> int:
             return sum(p.numel() for p in module.parameters() if p.requires_grad)
 

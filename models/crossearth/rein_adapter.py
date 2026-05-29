@@ -1,27 +1,25 @@
 """
-Rein – Reins adapter for DINOv2
----------------------------------
-Standalone implementation of Rein (CVPR 2024):
+ReinAdapter – Reins PEFT adapter for frozen ViT backbones
+-----------------------------------------------------------
+Standalone PyTorch implementation of Rein (CVPR 2024):
   "Stronger, Fewer, & Superior: Harnessing Vision Foundation Models
    for Domain Generalized Semantic Segmentation"
   https://arxiv.org/abs/2312.04265
 
-Rein inserts learnable tokens into the hidden state of each ViT block
-through a shared low-rank MLP, without modifying the backbone weights:
+Rein injects a lightweight residual into each ViT block's hidden state
+via a shared low-rank MLP and per-layer learnable tokens, leaving all
+backbone weights unchanged:
 
-  f'_i = f_i + Rein(f_i)
+    f'_i = f_i + scale_i · Rein(f_i)
 
-The trainable parameters are:
-  - learnable_tokens:  (num_layers, num_tokens, token_dim), i.e. ~0.5M params
-  - MLP shared across all layers
-  - scale, a learnable per-layer scalar
+Trainable parameters (~0.5M total for ViT-L with defaults):
+    learnable_tokens:  (num_layers, num_tokens, token_dim)
+    shared MLP:        (embed_dim + token_dim) → embed_dim
+    scale:             (num_layers,)  — one learnable scalar per layer
 
-The DINOv2 backbone remains fully frozen.
-
-Reference: https://github.com/w1oves/Rein (adapted for standalone use)
+Reference: https://github.com/w1oves/Rein
 """
 
-import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -29,18 +27,16 @@ import torch.nn.functional as F
 
 class ReinAdapter(nn.Module):
     """
-    Rein adapter for ViT backbones.
+    Rein adapter for frozen ViT backbones.
 
-    Parameters
-    ----------
-    num_layers  : int   number of transformer blocks in the backbone
-                        (12 for ViT-B, 24 for ViT-L, 32 for ViT-H)
-    embed_dim   : int   backbone hidden-state dimension
-                        (768 ViT-B, 1024 ViT-L, 1280 ViT-H)
-    num_tokens  : int   number of learnable tokens per layer (default 100)
-    token_dim   : int   internal token dimension (default 256)
+    Args:
+        num_layers: Number of transformer blocks in the backbone
+                    (e.g. 12 for ViT-B, 24 for ViT-L, 40 for ViT-G).
+        embed_dim:  Backbone hidden-state dimension
+                    (e.g. 768 for ViT-B, 1024 for ViT-L).
+        num_tokens: Number of learnable tokens per layer (default 100).
+        token_dim:  Internal token projection dimension (default 256).
     """
-
     def __init__(
         self,
         num_layers : int,
@@ -78,16 +74,19 @@ class ReinAdapter(nn.Module):
         layer_idx: int,
     ) -> torch.Tensor:
         """
-        Computes the Rein residual for a single layer.
+        Apply the Rein residual to a single ViT block's output.
 
-        Parameters
-        ----------
-        features  : (B, N, D)  ViT hidden state after block `layer_idx`
-        layer_idx : int
+        A global context vector is derived from the hidden state via max pooling,
+        concatenated with the layer's learnable tokens, and passed through the
+        shared MLP. The resulting residual is averaged over tokens and added to
+        all sequence positions, scaled by a learnable tanh-bounded scalar.
 
-        Returns
-        -------
-        features' : (B, N, D)  refined features
+        Args:
+            features:  Hidden state of shape (B, N, D) output by block layer_idx.
+            layer_idx: Index of the current transformer block.
+
+        Returns:
+            Refined hidden state of shape (B, N, D).
         """
         B, N, D = features.shape
         tokens = self.learnable_tokens[layer_idx]      # (num_tokens, token_dim)
@@ -110,4 +109,7 @@ class ReinAdapter(nn.Module):
 
     # ------------------------------------------------------------------
     def count_parameters(self) -> int:
+        """
+        Return the total number of trainable parameters in the adapter.
+        """
         return sum(p.numel() for p in self.parameters() if p.requires_grad)

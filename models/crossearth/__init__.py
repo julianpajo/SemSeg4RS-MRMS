@@ -49,13 +49,12 @@ Public API
 from .crossearth_seg import CrossEarthSeg
 from .rein_adapter   import ReinAdapter
 from .dinov2_rein    import DINOv2WithRein, DINOV2_CONFIGS
-from .decoder        import MLADecoder, LinearDecoder
+from .decoder        import Mask2FormerDecoder
 
 __all__ = [
     "CrossEarthSeg",
     "ReinAdapter",
     "DINOv2WithRein",
-    "MLADecoder",
-    "LinearDecoder",
+    "Mask2FormerDecoder",
     "DINOV2_CONFIGS",
 ]
